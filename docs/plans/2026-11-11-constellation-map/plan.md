@@ -1,6 +1,6 @@
 ---
 title: "Constellation Job Map UI for MAIN-XYP3RN-OS-Vault"
-status: in-progress
+status: done
 created: 2026-11-11
 size: large
 ---
@@ -40,7 +40,10 @@ Ambiguity sweep, four places checked:
 - P1 hub click toggles collapse, Enter or double-click focuses, Space toggles. Focus always shows the full tree. Opening a job in a collapsed sector expands it.
 - P1 Esc closes one layer per press: skill sheet, then panel, then focus.
 - P2 `NEED HELP BUILDING THIS?` and the settings button have no behaviour in the source; both are marked `// STUB`.
-- P3 geometry is computed in world units and the overview tree scale shrinks to fit the viewport; dots stay 7px on screen.
+- P3 geometry is computed in world units and the overview tree scale shrinks to fit the viewport; the hub keeps its 44px and dots shrink only as far as the gap between neighbours requires.
+- P3 on phones only the active sector keeps its ring label: six labels do not fit beside a ring 170px across.
+- P3 a stub offers no skill download; its download bar and skill card are disabled and show the STUB marker.
+- P3 `vitest.config.ts` became `vitest.config.mts` to load as an ES module without a Vite warning.
 
 ## 구현 계획
 
@@ -60,3 +63,28 @@ Ambiguity sweep, four places checked:
 - `npm test` (exit 0)
 - `npm run build` (exit 0)
 - Manual attest: headless screenshots of the overview, collapsed, focus, panel and skill sheet states.
+
+## 검증 결과
+
+Run on 2026-11-11 at the branch tip, each command on its own:
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | exit 0 |
+| `npm run lint` | exit 0, no warnings |
+| `npm test` | exit 0, 4 files, 67 tests |
+| `npm run build` | exit 0, `/map` 71.2 kB, all routes static |
+
+Headless Chrome against the production build, 22 of 22 checks passed, 0 console errors or warnings:
+137 node buttons, node aria-label format, collapse writes and survives `?open=`, expand/collapse all,
+arrow-key cycling, 14 panel sections, status restyles the node and persists, Esc order, focus view,
+search fly-to, BUILDS ON navigation, skill sheet frontmatter, download name, stub eyebrow, both stub routes.
+
+Lighthouse 13.6.0 accessibility: `/map` desktop 100, `/map` mobile 100, `/dashboards` mobile 100.
+
+Manual attest: screenshots in `docs/screenshots/` were read for the overview, collapsed, strip, focus,
+panel, skill sheet and mobile states.
+
+Not verified: 60fps with all six sectors expanded (no frame-rate measurement was taken); Safari and Firefox
+(only Chrome was driven); pinch zoom on a real touch device.
+
