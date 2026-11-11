@@ -54,8 +54,8 @@ export const LAYOUT = {
   /** Minimum centre distance between two overview dots before a layout attempt is rejected. */
   minDotGap: 12,
   layoutAttempts: 96,
-  focusStep: 78,
-  focusFirstRadius: [190, 229],
+  focusStep: 84,
+  focusFirstRadius: [214, 256],
   focusJitterDeg: 8,
   focusForkRadius: 95,
   focusLabelMaxChars: 13,

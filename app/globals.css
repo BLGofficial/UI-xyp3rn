@@ -1,0 +1,317 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-bg font-sans text-ink antialiased;
+    /* Faint dot grid: 1px dots, 24px pitch, 4% white. */
+    background-image: radial-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+    background-size: 24px 24px;
+    overflow: hidden;
+  }
+
+  :focus-visible {
+    outline: 2px solid theme('colors.accent');
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .micro {
+    @apply font-sans text-micro uppercase tracking-micro;
+  }
+
+  .frost {
+    @apply border border-hairline;
+    background: rgba(32, 35, 46, 0.86);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+  }
+
+  .outlined {
+    @apply rounded-lg border border-hairline;
+  }
+
+  .chip {
+    @apply rounded-md border border-hairline px-2.5 py-1 font-mono text-[11px] text-ink;
+  }
+}
+
+/* ---------- Constellation SVG ---------- */
+
+.map-svg {
+  --expand: 320ms;
+  --stagger: 18ms;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.sector {
+  transition: opacity 300ms ease;
+}
+
+/* View 2: branches draw from the hub outward, nodes pop in, staggered per depth level. */
+.tree-seg {
+  fill: none;
+  stroke: theme('colors.ink');
+  stroke-width: calc(1px * var(--inv, 1));
+  opacity: 0.3;
+  pointer-events: none;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  transition:
+    stroke-dashoffset var(--expand) ease-out calc(var(--depth, 1) * var(--stagger)),
+    opacity 160ms ease;
+}
+
+.tree-node {
+  transition:
+    transform var(--expand) cubic-bezier(0.2, 0.9, 0.3, 1.3) calc(var(--depth, 1) * var(--stagger)),
+    visibility 0s;
+}
+
+/* Collapse runs deepest-first at 60% of the expand duration. */
+.tree[data-open='false'] .tree-seg {
+  stroke-dashoffset: 1;
+  transition:
+    stroke-dashoffset calc(var(--expand) * 0.6) ease-in calc((var(--max-depth, 8) - var(--depth, 1)) * var(--stagger)),
+    opacity 160ms ease;
+}
+
+.tree[data-open='false'] .tree-node {
+  transform: scale(0);
+  /* Hidden nodes must leave the tab order once the collapse has played. */
+  visibility: hidden;
+  transition:
+    transform calc(var(--expand) * 0.6) ease-in calc((var(--max-depth, 8) - var(--depth, 1)) * var(--stagger)),
+    visibility 0s linear calc(var(--expand) * 0.6 + var(--max-depth, 8) * var(--stagger));
+}
+
+/* Decoration only: invisible stubs must not swallow clicks meant for the first nodes. */
+.tree-stubs,
+.root-dot {
+  pointer-events: none;
+  transition: opacity 200ms ease;
+}
+
+.tree-stubs {
+  opacity: 0;
+}
+
+.tree[data-open='false'] .tree-stubs {
+  opacity: 1;
+  transition-delay: calc(var(--expand) * 0.6);
+}
+
+.tree[data-open='false'] .root-dot {
+  opacity: 0;
+}
+
+.hub,
+.node {
+  cursor: pointer;
+  outline: none;
+}
+
+.focus-ring {
+  fill: none;
+  stroke-width: 1.5;
+  opacity: 0;
+}
+
+.hub:focus-visible .focus-ring,
+.node:focus-visible .focus-ring {
+  opacity: 1;
+}
+
+.node-body {
+  transition: transform 160ms ease;
+}
+
+.node:hover .node-body,
+.node:focus-visible .node-body {
+  transform: scale(1.15);
+}
+
+/* Hovering a node brightens the segment arriving at it and the one leaving it. */
+.node-group:hover > .tree-seg,
+.node-group:focus-within > .tree-seg,
+.node-group:hover + .node-group > .tree-seg,
+.node-group:focus-within + .node-group > .tree-seg {
+  opacity: 1;
+}
+
+.node-label {
+  font-family: theme('fontFamily.sans');
+  font-size: 12px;
+  paint-order: stroke;
+  stroke: theme('colors.bg');
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.sat-label {
+  font-family: theme('fontFamily.sans');
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  fill: theme('colors.ink');
+  paint-order: stroke;
+  stroke: theme('colors.bg');
+  stroke-width: 3px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease;
+}
+
+.node:hover .sat-label,
+.node:focus-visible .sat-label,
+.node[data-selected='true'] .sat-label {
+  opacity: 1;
+}
+
+.sector-tagline {
+  opacity: var(--tagline, 1);
+}
+
+.svg-micro {
+  font-family: theme('fontFamily.sans');
+  text-transform: uppercase;
+  letter-spacing: 0.25em;
+  pointer-events: none;
+}
+
+.sector-name {
+  font-family: theme('fontFamily.serif');
+  /* Cormorant defaults to old-style figures, which turn "01" into "o1". */
+  font-variant-numeric: lining-nums;
+  font-weight: 300;
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  pointer-events: none;
+  transition: fill 300ms ease;
+}
+
+.pulse-ring {
+  fill: none;
+  stroke-width: 1;
+  animation: pulse-ring 1.8s ease-out infinite;
+  pointer-events: none;
+}
+
+.pulse-ring + .pulse-ring {
+  animation-delay: 0.9s;
+}
+
+.breathe {
+  animation: breathe var(--breathe, 7s) ease-in-out var(--phase, 0s) infinite;
+}
+
+.brain-drift {
+  animation: drift var(--drift, 180s) linear infinite;
+}
+
+.brain-drift[data-reverse='true'] {
+  animation-direction: reverse;
+}
+
+.brain-twinkle {
+  animation: twinkle var(--twinkle, 5s) ease-in-out var(--phase, 0s) infinite;
+}
+
+.fade-in {
+  animation: fade-in 150ms ease-out both;
+}
+
+.sheet-in {
+  animation: sheet-in 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    transform: translateY(-1.5px);
+  }
+  50% {
+    transform: translateY(1.5px);
+  }
+}
+
+@keyframes drift {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes twinkle {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@keyframes pulse-ring {
+  from {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  to {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+}
+
+@media (max-width: 767px) {
+  @keyframes sheet-in {
+    from {
+      opacity: 0;
+      transform: translateY(24px);
+    }
+  }
+}
+
+/* Reduced motion: no idle loops, and every transition becomes a 150ms crossfade. */
+@media (prefers-reduced-motion: reduce) {
+  .breathe,
+  .brain-drift,
+  .brain-twinkle,
+  .pulse-ring {
+    animation: none;
+  }
+
+  .sheet-in {
+    animation: fade-in 150ms ease-out both;
+  }
+
+  .map-svg {
+    --expand: 150ms;
+    --stagger: 0ms;
+  }
+
+  .node-body {
+    transition: none;
+  }
+}

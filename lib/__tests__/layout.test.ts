@@ -177,6 +177,16 @@ describe('layoutSector (overview)', () => {
     expect(agents.chains.map((i) => core.chains[i]!.nodeIds.length)).toEqual([4, 4]);
   });
 
+  it('starts every branch beyond a larger hub when asked to', () => {
+    departments.forEach((dept) => {
+      const layout = layoutSector(dept, { hubRadius: 50 });
+      layout.nodes.forEach((node) => {
+        expect(Math.hypot(node.x, node.y)).toBeGreaterThanOrEqual(50 + LAYOUT.segMin);
+      });
+      expect(layout.nodes).toHaveLength(dept.jobs.length);
+    });
+  });
+
   it('grows away from the ring centre when the hub sits on the ring', () => {
     const hub = ringPosition(2, 6, 200);
     const nodes = layoutTree(sector('02_KNOWLEDGE_LAYER'), hub, false);

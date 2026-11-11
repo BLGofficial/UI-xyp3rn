@@ -19,6 +19,8 @@ type PlannedChain = { cluster: string; label: string; jobs: Job[]; count: number
 type PlannedBranch = { folder: string; nested: boolean; chains: PlannedChain[] };
 
 type TreeSpec = {
+  /** Hub radius in the tree's own units. */
+  hubRadius: number;
   wedge: number;
   jitter: number;
   segMin: number;
@@ -29,7 +31,8 @@ type TreeSpec = {
   minGap: number;
 };
 
-const OVERVIEW: TreeSpec = {
+const overviewSpec = (hubRadius: number): TreeSpec => ({
+  hubRadius,
   wedge: LAYOUT.wedgeDeg * DEG,
   jitter: LAYOUT.jitterDeg * DEG,
   segMin: LAYOUT.segMin,
@@ -37,12 +40,13 @@ const OVERVIEW: TreeSpec = {
   // Neighbouring chains start at two different radii so their first dots do not collide near the hub.
   firstRadius: (chainIndex, forked) =>
     // Forked chains start one segment further out so they also clear their unforked neighbours.
-    LAYOUT.hubRadius + (forked ? LAYOUT.segMin : 0) + (chainIndex % 2 === 0 ? LAYOUT.segMin + 2 : LAYOUT.segMax),
-  forkRadius: LAYOUT.hubRadius + LAYOUT.forkTrunk,
+    hubRadius + (forked ? LAYOUT.segMin : 0) + (chainIndex % 2 === 0 ? LAYOUT.segMin + 2 : LAYOUT.segMax),
+  forkRadius: hubRadius + LAYOUT.forkTrunk,
   minGap: LAYOUT.minDotGap,
-};
+});
 
 const FOCUS: TreeSpec = {
+  hubRadius: LAYOUT.hubRadius,
   wedge: LAYOUT.focusArcDeg * DEG,
   jitter: LAYOUT.focusJitterDeg * DEG,
   segMin: LAYOUT.focusStep,
@@ -157,7 +161,7 @@ function buildTree(
       segments.push({
         id: `${department.id}:trunk:${branchIndex}`,
         kind: 'trunk',
-        from: polar(hub, branchAngle, LAYOUT.hubRadius),
+        from: polar(hub, branchAngle, spec.hubRadius),
         to: forkPoint,
         depth: 1,
         branchIndex,
@@ -170,7 +174,7 @@ function buildTree(
       const angle = slotAngle(chainIndex);
       const baseDepth = forkPoint ? 2 : 1;
       let position = polar(hub, angle, spec.firstRadius(chainIndex, forked));
-      let from = forkPoint ?? polar(hub, angle, LAYOUT.hubRadius);
+      let from = forkPoint ?? polar(hub, angle, spec.hubRadius);
       let sign = rng() < 0.5 ? 1 : -1;
 
       chain.jobs.forEach((job, k) => {
@@ -263,9 +267,15 @@ function solve(department: Department, hub: Point, outward: number, spec: TreeSp
  * @param department sector to lay out
  * @param options.hub hub centre, default origin
  * @param options.outward growth direction in radians, default straight up
+ * @param options.hubRadius hub radius in tree units; pass 22 / scale when the tree is drawn
+ *   scaled down around a hub that keeps its pixel size, so branches still start at its edge
  */
-export function layoutSector(department: Department, options: { hub?: Point; outward?: number } = {}): SectorLayout {
-  return solve(department, options.hub ?? { x: 0, y: 0 }, options.outward ?? UP, OVERVIEW);
+export function layoutSector(
+  department: Department,
+  options: { hub?: Point; outward?: number; hubRadius?: number } = {},
+): SectorLayout {
+  const spec = overviewSpec(options.hubRadius ?? LAYOUT.hubRadius);
+  return solve(department, options.hub ?? { x: 0, y: 0 }, options.outward ?? UP, spec);
 }
 
 /**
