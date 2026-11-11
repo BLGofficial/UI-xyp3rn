@@ -72,7 +72,6 @@ export const ui = {
     'fully-autonomous': 'FULLY AUTONOMOUS',
   } satisfies Record<Autonomy, string>,
   panel: {
-    label: 'Job details',
     close: 'Close job panel',
     download: {
       aria: 'Open the skill file',
@@ -95,7 +94,6 @@ export const ui = {
     none: 'None',
   },
   viewer: {
-    label: 'Skill file',
     badge: 'SKILL.MD',
     copyInstall: 'COPY INSTALL COMMAND',
     copy: 'COPY',
