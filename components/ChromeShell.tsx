@@ -161,11 +161,11 @@ export function ChromeShell({ children }: { children: ReactNode }) {
           </button>
         </aside>
 
-        <main className="relative min-h-0 min-w-0 flex-1">
+        <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           {children}
           <nav
             aria-label={ui.nav.label}
-            className="frost absolute left-1/2 top-4 z-30 flex -translate-x-1/2 gap-1 rounded-full p-1"
+            className="frost absolute left-1/2 top-4 z-30 flex -translate-x-1/2 gap-1 rounded-full p-1 shadow-[0_14px_38px_rgba(0,0,0,0.55)]"
           >
             {ui.nav.items.map((item) => {
               const current = pathname === item.href;

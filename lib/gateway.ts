@@ -16,7 +16,10 @@ import type {
   GatewayMode,
   GatewayRequest,
   GatewayResponse,
+  JarvisChangeProposal,
+  JarvisCitation,
   JarvisExchange,
+  JarvisInspectionPayload,
   VaultNotePayload,
   VaultSearchHit,
   X3liusTrack,
@@ -358,6 +361,9 @@ export async function dispatchJarvis(
       connectorCount: number;
       connectorHealthy: number;
       action: GatewayAction;
+      citations: JarvisCitation[];
+      proposal: JarvisChangeProposal;
+      requiresReadAcceptance: boolean;
     }>;
     if (typeof payload.reply !== 'string' || !payload.reply.trim()) {
       return local;
@@ -370,6 +376,9 @@ export async function dispatchJarvis(
         reply: payload.reply,
         engine: payload.engine ?? local.exchange.engine,
         mode,
+        citations: Array.isArray(payload.citations) ? payload.citations : undefined,
+        proposal: payload.proposal,
+        requiresReadAcceptance: payload.requiresReadAcceptance,
       },
       connectorCount: payload.connectorCount ?? LAYOUT.mcpConnectorTotal,
       connectorHealthy: payload.connectorHealthy ?? LAYOUT.mcpConnectorTotal,
@@ -749,6 +758,77 @@ export async function decideGatewayApproval(
     if (!response.ok) return null;
     const data = (await response.json()) as Partial<{ ok: boolean; approval: GatewayApprovalItem }>;
     return data.ok && data.approval ? data.approval : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Directly reads and inspects a file/note across the Obsidian Vault or Whole OS codebase via `127.0.0.1:8077/api/jarvis/inspect`.
+ */
+export async function inspectJarvisSource(
+  scope: 'vault' | 'os',
+  relPath: string,
+  options: { fetchImpl?: typeof fetch; baseUrl?: string } = {},
+): Promise<JarvisInspectionPayload | null> {
+  const fetchFn = options.fetchImpl ?? (typeof fetch !== 'undefined' ? fetch : undefined);
+  const baseUrl = options.baseUrl ?? GATEWAY_BASE_URL;
+  if (!fetchFn) return null;
+  try {
+    const response = await fetchFn(
+      `${baseUrl}/api/jarvis/inspect?scope=${encodeURIComponent(scope)}&path=${encodeURIComponent(relPath)}`,
+    );
+    if (!response.ok) return null;
+    const data = (await response.json()) as Partial<JarvisInspectionPayload>;
+    return data.ok ? (data as JarvisInspectionPayload) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Applies or declines a proposed Jarvis change via `127.0.0.1:8077/api/jarvis/proposal/decide`.
+ */
+export async function decideJarvisProposal(
+  input: {
+    proposalId: string;
+    decision: 'approved' | 'rejected';
+    approver?: string;
+    reason?: string;
+  },
+  options: { fetchImpl?: typeof fetch; baseUrl?: string } = {},
+): Promise<{
+  ok: boolean;
+  applied: boolean;
+  decision: 'approved' | 'rejected';
+  vaultPath?: string;
+  sha256?: string;
+  message: string;
+} | null> {
+  const fetchFn = options.fetchImpl ?? (typeof fetch !== 'undefined' ? fetch : undefined);
+  const baseUrl = options.baseUrl ?? GATEWAY_BASE_URL;
+  if (!fetchFn) return null;
+  try {
+    const response = await fetchFn(`${baseUrl}/api/jarvis/proposal/decide`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        proposalId: input.proposalId,
+        decision: input.decision,
+        approver: input.approver ?? 'operator',
+        reason: input.reason ?? '',
+      }),
+    });
+    if (!response.ok) return null;
+    const data = (await response.json()) as Partial<{
+      ok: boolean;
+      applied: boolean;
+      decision: 'approved' | 'rejected';
+      vaultPath: string;
+      sha256: string;
+      message: string;
+    }>;
+    return data.ok ? (data as NonNullable<Awaited<ReturnType<typeof decideJarvisProposal>>>) : null;
   } catch {
     return null;
   }

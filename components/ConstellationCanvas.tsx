@@ -20,8 +20,8 @@ import { BrainCore } from './BrainCore';
 import { SectorTree } from './SectorTree';
 
 const DEG = Math.PI / 180;
-const ZOOM_MIN = 0.5;
-const ZOOM_MAX = 2.6;
+const ZOOM_MIN = 0.45;
+const ZOOM_MAX = 4.2;
 const ORBITS = [170, 350, 530];
 
 // React warns about useLayoutEffect during server rendering; the effect only matters in the browser.
@@ -40,6 +40,7 @@ const fold = (degrees: number) => {
 };
 
 export type FlyRequest = { jobId: string; nonce: number };
+export type ZoomCommand = { id: number; action: 'in' | 'out' | 'reset' };
 
 type Geometry = {
   ready: boolean;
@@ -70,6 +71,10 @@ type ConstellationCanvasProps = {
   fly: FlyRequest | null;
   /** Bumped when the operator cycles sectors from the overview; unrolls the ring into a strip. */
   strip: number;
+  threeDMode?: boolean;
+  zoomCommand?: ZoomCommand | null;
+  onZoomChange?: (zoomPct: number) => void;
+  onHoverJob?: (hover: { job: Department['jobs'][number]; department: Department } | null) => void;
   onToggle: (id: DepartmentId) => void;
   onFocus: (id: DepartmentId) => void;
   onSelect: (jobId: string) => void;
@@ -89,6 +94,10 @@ export function ConstellationCanvas({
   statuses,
   fly,
   strip,
+  threeDMode = true,
+  zoomCommand,
+  onZoomChange,
+  onHoverJob,
   onToggle,
   onFocus,
   onSelect,
@@ -98,7 +107,20 @@ export function ConstellationCanvas({
   const step = 360 / count;
 
   const wrapRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  const lastReportedZoomRef = useRef<number>(100);
+  const onZoomChangeRef = useRef(onZoomChange);
+  onZoomChangeRef.current = onZoomChange;
+  const jobLookup = useMemo(() => {
+    const map = new Map<string, { job: Department['jobs'][number]; department: Department }>();
+    for (const dept of departments) {
+      for (const job of dept.jobs) {
+        map.set(job.id, { job, department: dept });
+      }
+    }
+    return map;
+  }, [departments]);
   const cameraRef = useRef<SVGGElement>(null);
   const overviewRef = useRef<SVGGElement>(null);
   const focusRef = useRef<SVGGElement>(null);
@@ -295,10 +317,19 @@ export function ConstellationCanvas({
     }
     if (brainRef.current) brainRef.current.style.opacity = String(1 - 0.85 * u);
     if (watermarkRef.current) watermarkRef.current.style.opacity = String(0.05 * f);
+    const currentZoom = zoom.get();
     cameraRef.current?.setAttribute(
       'transform',
-      `translate(${(g.cx + panX.get()).toFixed(2)} ${(g.cy + panY.get()).toFixed(2)}) scale(${zoom.get().toFixed(4)})`,
+      `translate(${(g.cx + panX.get()).toFixed(2)} ${(g.cy + panY.get()).toFixed(2)}) scale(${currentZoom.toFixed(4)})`,
     );
+    if (svgRef.current) {
+      svgRef.current.dataset.zoomLod = currentZoom >= 1.45 ? 'detail' : 'overview';
+    }
+    const pct = Math.round(currentZoom * 100);
+    if (lastReportedZoomRef.current !== pct) {
+      lastReportedZoomRef.current = pct;
+      onZoomChangeRef.current?.(pct);
+    }
   }, [count, step, rot, unroll, slide, focusT, panX, panY, zoom]);
 
   // Runs after every render so new geometry and freshly mounted nodes are positioned before paint.
@@ -376,13 +407,56 @@ export function ConstellationCanvas({
       const g = geometryRef.current;
       const pan = g.focusBounds
         ? clampPan({ x: next.x, y: next.y }, next.zoom, g.focusBounds, g, { x: g.cx, y: g.cy }, 80)
-        : { x: next.x, y: next.y };
+        : {
+            x: clamp(next.x, -Math.max(240, g.width * 0.65 * next.zoom), Math.max(240, g.width * 0.65 * next.zoom)),
+            y: clamp(next.y, -Math.max(200, g.height * 0.65 * next.zoom), Math.max(200, g.height * 0.65 * next.zoom)),
+          };
       zoom.set(next.zoom);
       panX.set(pan.x);
       panY.set(pan.y);
     },
     [panX, panY, zoom],
   );
+
+  // Imperative HUD zoom button & reset commands
+  useEffect(() => {
+    if (!zoomCommand) return;
+    const g = geometryRef.current;
+    const dur = (reduced ? MOTION.reduced : 220) / 1000;
+    const opts = { duration: dur, ease: 'easeOut' } as const;
+    if (zoomCommand.action === 'reset') {
+      const controls = [animate(panX, 0, opts), animate(panY, 0, opts), animate(zoom, 1, opts)];
+      return () => controls.forEach((c) => c.stop());
+    }
+    const factor = zoomCommand.action === 'in' ? 1.32 : 1 / 1.32;
+    const target = zoomAt(
+      { x: panX.get(), y: panY.get(), zoom: zoom.get() },
+      { x: g.cx, y: g.cy },
+      factor,
+      { x: g.cx, y: g.cy },
+      ZOOM_MIN,
+      ZOOM_MAX,
+    );
+    const pan = g.focusBounds
+      ? clampPan({ x: target.x, y: target.y }, target.zoom, g.focusBounds, g, { x: g.cx, y: g.cy }, 80)
+      : {
+          x: clamp(target.x, -Math.max(240, g.width * 0.65 * target.zoom), Math.max(240, g.width * 0.65 * target.zoom)),
+          y: clamp(target.y, -Math.max(200, g.height * 0.65 * target.zoom), Math.max(200, g.height * 0.65 * target.zoom)),
+        };
+    const controls = [animate(zoom, target.zoom, opts), animate(panX, pan.x, opts), animate(panY, pan.y, opts)];
+    return () => controls.forEach((c) => c.stop());
+  }, [zoomCommand, reduced, panX, panY, zoom]);
+
+  // 3D Stage resting perspective orientation
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    if (!threeDMode || reduced) {
+      stage.style.transform = '';
+    } else {
+      stage.style.transform = 'perspective(1500px) rotateX(6deg) rotateY(0deg)';
+    }
+  }, [threeDMode, reduced]);
 
   // Search: fly to the job. Declared after the focus effect so it wins over that effect's camera reset.
   useEffect(() => {
@@ -413,7 +487,7 @@ export function ConstellationCanvas({
   // Wheel zoom needs a non-passive listener to stop the page from scrolling.
   useEffect(() => {
     const svg = svgRef.current;
-    if (!svg || !focusId) return;
+    if (!svg) return;
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
       const g = geometryRef.current;
@@ -442,7 +516,7 @@ export function ConstellationCanvas({
   };
 
   const onPointerDown = (event: PointerEvent<SVGSVGElement>) => {
-    if (!focusId) return;
+    if (event.button !== 0) return;
     pointers.current.set(event.pointerId, local(event));
     const points = [...pointers.current.values()];
     gesture.current = {
@@ -492,19 +566,57 @@ export function ConstellationCanvas({
     event.stopPropagation();
   };
 
+  const handleStageTilt = (event: PointerEvent<HTMLDivElement>) => {
+    const el = stageRef.current;
+    if (!el || !threeDMode || reduced) return;
+    const box = event.currentTarget.getBoundingClientRect();
+    if (box.width === 0 || box.height === 0) return;
+    const nx = (event.clientX - box.left) / box.width - 0.5;
+    const ny = (event.clientY - box.top) / box.height - 0.5;
+    const rx = (5 - ny * 10).toFixed(2);
+    const ry = (nx * 12).toFixed(2);
+    el.style.transform = `perspective(1500px) rotateX(${rx}deg) rotateY(${ry}deg)`;
+  };
+
+  const resetStageTilt = () => {
+    const el = stageRef.current;
+    if (!el) return;
+    el.style.transform = threeDMode && !reduced ? 'perspective(1500px) rotateX(6deg) rotateY(0deg)' : '';
+    onHoverJob?.(null);
+  };
+
+  const handleSvgHover = (event: PointerEvent<SVGSVGElement>) => {
+    if (!onHoverJob) return;
+    const jobEl = (event.target as Element | null)?.closest?.('[data-job-id]');
+    const jobId = jobEl?.getAttribute('data-job-id');
+    onHoverJob(jobId ? (jobLookup.get(jobId) ?? null) : null);
+  };
+
   const focusDept = departments[focusIndex];
   const focusLayout = focusLayouts[focusIndex];
 
   return (
-    <div ref={wrapRef} className="absolute inset-0">
+    <div
+      ref={wrapRef}
+      className="absolute inset-0"
+      onPointerMove={handleStageTilt}
+      onPointerLeave={resetStageTilt}
+    >
+      <div
+        ref={stageRef}
+        className={threeDMode ? 'constellation-3d-stage h-full w-full' : 'h-full w-full'}
+      >
       <svg
         ref={svgRef}
         className="map-svg h-full w-full"
         role="group"
         aria-label={ui.overview.mapLabel}
-        style={{ cursor: focusId ? 'grab' : undefined }}
+        style={{ cursor: 'grab' }}
         onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
+        onPointerMove={(e) => {
+          onPointerMove(e);
+          handleSvgHover(e);
+        }}
         onPointerUp={onPointerEnd}
         onPointerCancel={onPointerEnd}
         onClickCapture={onClickCapture}
@@ -513,6 +625,22 @@ export function ConstellationCanvas({
           <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
             <feGaussianBlur stdDeviation="6" />
           </filter>
+          <radialGradient id="sphere-3d-core" cx="34%" cy="30%" r="72%">
+            <stop offset="0%" stopColor="#FFE9C2" stopOpacity="0.95" />
+            <stop offset="35%" stopColor="#E6994B" stopOpacity="0.65" />
+            <stop offset="72%" stopColor="#7C5CE6" stopOpacity="0.45" />
+            <stop offset="100%" stopColor="#0D111C" stopOpacity="0.1" />
+          </radialGradient>
+          <radialGradient id="sphere-3d-solid" cx="32%" cy="28%" r="70%">
+            <stop offset="0%" stopColor="rgba(255,255,255,0.48)" />
+            <stop offset="42%" stopColor="rgba(255,255,255,0.08)" />
+            <stop offset="100%" stopColor="rgba(0,0,0,0.48)" />
+          </radialGradient>
+          <radialGradient id="hub-3d-glass" cx="35%" cy="30%" r="75%">
+            <stop offset="0%" stopColor="#2A3352" />
+            <stop offset="55%" stopColor="#14192B" />
+            <stop offset="100%" stopColor="#080B13" />
+          </radialGradient>
           <clipPath id="half-left">
             <rect x={-18} y={-18} width={18} height={36} />
           </clipPath>
@@ -629,6 +757,7 @@ export function ConstellationCanvas({
           </>
         )}
       </svg>
+      </div>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 'use client';
 
+import { Box, Minus, Plus, RotateCcw } from 'lucide-react';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { departments as seedDepartments, ui } from '@/data/map';
@@ -12,9 +13,9 @@ import {
 } from '@/lib/os3-adapter';
 import { resolveStatus } from '@/lib/storage';
 import { parseOpenParam, serializeOpenParam } from '@/lib/url';
-import type { DepartmentId, GatewayMode, Status } from '@/lib/types';
+import type { Department, DepartmentId, GatewayMode, Job, Status } from '@/lib/types';
 import { useChrome } from './ChromeShell';
-import { ConstellationCanvas, type FlyRequest } from './ConstellationCanvas';
+import { ConstellationCanvas, type FlyRequest, type ZoomCommand } from './ConstellationCanvas';
 import { JarvisDock } from './JarvisDock';
 import { JarvisView } from './JarvisView';
 import { JobPanel } from './JobPanel';
@@ -28,6 +29,14 @@ const ALL: DepartmentId[] = seedDepartments.map((dept) => dept.id);
 export function MapScreen() {
   const { active, setActive, jarvisOpen, setJarvisOpen } = useChrome();
   const pathname = usePathname();
+  const [zoomPct, setZoomPct] = useState(100);
+  const [threeDMode, setThreeDMode] = useState(true);
+  const [zoomCmd, setZoomCmd] = useState<ZoomCommand | null>(null);
+  const [hoveredNode, setHoveredNode] = useState<{ job: Job; department: Department } | null>(null);
+
+  const sendZoomCmd = useCallback((action: ZoomCommand['action']) => {
+    setZoomCmd((prev) => ({ id: (prev?.id ?? 0) + 1, action }));
+  }, []);
   const searchParams = useSearchParams();
 
   // The URL seeds the state once; after that state leads and the URL is rewritten to match.
@@ -196,17 +205,35 @@ export function MapScreen() {
         statuses={statuses}
         fly={fly}
         strip={strip}
+        threeDMode={threeDMode}
+        zoomCommand={zoomCmd}
+        onZoomChange={setZoomPct}
+        onHoverJob={setHoveredNode}
         onToggle={toggle}
         onFocus={focusSector}
         onSelect={selectJob}
       />
 
-      <div className="absolute left-3 top-[60px] z-20 flex flex-col items-start gap-1 md:left-4 md:top-4">
+      <div className="absolute left-3 top-[60px] z-20 flex flex-col items-start gap-1.5 md:left-4 md:top-4">
         <SearchBar departments={departments} onHome={goHome} onFly={(jobId) => selectJob(jobId, { fly: true })} />
         {focusId && (
           <button type="button" onClick={() => setFocusId(null)} className="micro rounded px-1 py-2 text-ink-dim hover:text-ink">
             {ui.focus.back}
           </button>
+        )}
+        {hoveredNode && !selected && (
+          <div className="frost pointer-events-none max-w-[270px] rounded-xl px-3 py-2 text-xs shadow-lg">
+            <div className="flex items-center gap-2">
+              <span
+                className="h-2 w-2 shrink-0 rounded-full"
+                style={{ backgroundColor: hoveredNode.department.color }}
+              />
+              <span className="truncate font-semibold text-ink">{hoveredNode.job.title}</span>
+            </div>
+            <p className="mt-0.5 truncate font-mono text-[10px] text-ink-dim">
+              {hoveredNode.department.name} · {ui.status.spoken[resolveStatus(hoveredNode.job, statuses)]}
+            </p>
+          </div>
         )}
       </div>
 
@@ -232,6 +259,52 @@ export function MapScreen() {
             RETRY
           </button>
         )}
+      </div>
+
+      {/* 3D Camera Zoom & Perspective HUD */}
+      <div
+        role="toolbar"
+        aria-label="Constellation camera and 3D controls"
+        className="frost absolute right-3 top-[106px] z-20 flex items-center gap-1 rounded-full px-1.5 py-1 md:right-4 md:top-[58px]"
+      >
+        <button
+          type="button"
+          aria-label="Zoom out constellation"
+          onClick={() => sendZoomCmd('out')}
+          className="grid h-7 w-7 place-items-center rounded-full text-ink-dim transition hover:bg-white/10 hover:text-ink"
+        >
+          <Minus size={13} />
+        </button>
+        <span className="min-w-[44px] text-center font-mono text-[10px] tabular-nums text-ink">{zoomPct}%</span>
+        <button
+          type="button"
+          aria-label="Zoom in constellation"
+          onClick={() => sendZoomCmd('in')}
+          className="grid h-7 w-7 place-items-center rounded-full text-ink-dim transition hover:bg-white/10 hover:text-ink"
+        >
+          <Plus size={13} />
+        </button>
+        <button
+          type="button"
+          aria-label="Reset constellation camera"
+          onClick={() => sendZoomCmd('reset')}
+          className="grid h-7 w-7 place-items-center rounded-full text-ink-dim transition hover:bg-white/10 hover:text-ink"
+          title="Reset camera zoom & pan"
+        >
+          <RotateCcw size={12} />
+        </button>
+        <span className="mx-0.5 h-3.5 w-px bg-white/15" aria-hidden="true" />
+        <button
+          type="button"
+          aria-label="Toggle 3D tilt"
+          aria-pressed={threeDMode}
+          onClick={() => setThreeDMode((v) => !v)}
+          className={`flex items-center gap-1 rounded-full px-2 py-1 font-mono text-[10px] transition ${
+            threeDMode ? 'bg-accent/20 text-accent' : 'text-ink-dim hover:bg-white/10 hover:text-ink'
+          }`}
+        >
+          <Box size={11} /> 3D
+        </button>
       </div>
 
       {!focusId && (

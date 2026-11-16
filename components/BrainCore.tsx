@@ -126,6 +126,28 @@ export const BrainCore = memo(function BrainCore({ radius, colors }: BrainCorePr
           </g>
         );
       })}
+      {/* 3D Core planetary core lighting, orbital meridian rings, and specular crest */}
+      <circle r={radius * 0.72} fill="url(#sphere-3d-core)" opacity={0.38} pointerEvents="none" />
+      <ellipse
+        rx={radius * 0.96}
+        ry={radius * 0.34}
+        fill="none"
+        stroke="rgba(255, 224, 178, 0.24)"
+        strokeWidth={1}
+        strokeDasharray="3 5"
+        transform="rotate(-18)"
+        pointerEvents="none"
+      />
+      <ellipse
+        rx={radius * 0.96}
+        ry={radius * 0.34}
+        fill="none"
+        stroke="rgba(155, 140, 255, 0.28)"
+        strokeWidth={1}
+        transform="rotate(24)"
+        pointerEvents="none"
+      />
+      <circle cx={-radius * 0.24} cy={-radius * 0.26} r={radius * 0.16} fill="rgba(255,255,255,0.16)" pointerEvents="none" />
       {showLabels && (
         <g textAnchor="middle" stroke={TOKENS.bg} strokeWidth={3.5} paintOrder="stroke">
           <text className="svg-micro" y={radius * 0.58} fontSize={9} fill={TOKENS.ink}>
