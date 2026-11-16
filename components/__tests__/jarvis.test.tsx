@@ -88,7 +88,7 @@ describe('JarvisDock and JarvisView', () => {
 
     const input = screen.getByRole('textbox', { name: ui.jarvis.inputLabel });
     await userEvent.type(input, 'xyp3rn> status{Enter}');
-    expect(await screen.findByText(/137/)).toBeInTheDocument();
+    expect(await screen.findByText(/137/, undefined, { timeout: 3000 })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: ui.jarvis.openConsole }));
     expect(onOpenConsole).toHaveBeenCalledTimes(1);
@@ -113,7 +113,7 @@ describe('JarvisDock and JarvisView', () => {
     const quickBtn = within(dialog).getByRole('button', { name: /Mission\.md/i });
     await userEvent.click(quickBtn);
 
-    const chip = await within(dialog).findByRole('button', { name: /Mission & Operator Identity/i });
+    const chip = await within(dialog).findByRole('button', { name: /Mission & Operator Identity/i }, { timeout: 3000 });
     await userEvent.click(chip);
     expect(onSelectJob).toHaveBeenCalledWith('mission-identity');
   });

@@ -155,6 +155,28 @@ export function JarvisView({
     });
   }, [voiceState, input, executePrompt]);
 
+  const handleSelectVoiceState = useCallback(
+    (next: JarvisVoiceState) => {
+      if (next === voiceState) return;
+      if (next === 'listening') {
+        if (voiceState !== 'listening') {
+          toggleVoice();
+        }
+        return;
+      }
+      if (voiceState === 'listening') {
+        stopCaptureRef.current?.();
+        stopCaptureRef.current = null;
+      }
+      if (voiceState === 'speaking') {
+        stopSpeakRef.current?.();
+        stopSpeakRef.current = null;
+      }
+      setVoiceState(next);
+    },
+    [voiceState, toggleVoice],
+  );
+
   const handleCompose = (track: X3liusTrack) => {
     void executePrompt(`xyp3rn> compose "${track.title}"`);
   };
@@ -234,6 +256,7 @@ export function JarvisView({
               activeEngine={engine}
               energy={energy}
               onTriggerVoice={toggleVoice}
+              onSelectState={handleSelectVoiceState}
             />
 
             <div className="flex flex-wrap items-center justify-center gap-2">
