@@ -60,6 +60,16 @@ export const LAYOUT = {
   focusForkRadius: 95,
   focusLabelMaxChars: 13,
   focusLabelMaxLines: 2,
+  jarvisOrbRadius: 48,
+  jarvisRingCount: 4,
+  jarvisRingStep: 18,
+  jarvisBarCount: 24,
+  jarvisBarInner: 58,
+  jarvisBarMaxLen: 32,
+  playerSpectrumBars: 24,
+  gatewayPort: 8077,
+  mcpConnectorTotal: 21,
+  sessionLogMax: 50,
 } as const;
 
 /** Durations in milliseconds unless noted. */
@@ -74,6 +84,10 @@ export const MOTION = {
   breatheMinSeconds: 6,
   breatheMaxSeconds: 9,
   breathePx: 1.5,
+  jarvisPulseMs: 1400,
+  jarvisSweepMs: 2400,
+  spectrumTickMs: 80,
+  gatewayTimeoutMs: 1200,
 } as const;
 
 export const BREAKPOINT_MOBILE = 768;

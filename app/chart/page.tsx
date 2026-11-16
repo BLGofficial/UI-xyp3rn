@@ -1,5 +1,5 @@
-import { EmptyState } from '@/components/EmptyState';
+import { KnowledgeGraphView } from '@/components/KnowledgeGraphView';
 
 export default function ChartPage() {
-  return <EmptyState view="chart" />;
+  return <KnowledgeGraphView />;
 }

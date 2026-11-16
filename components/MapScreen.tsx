@@ -1,25 +1,32 @@
 'use client';
 
 import { usePathname, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
-import { departments, ui } from '@/data/map';
-import { readStatusOverrides, resolveStatus, writeStatusOverrides } from '@/lib/storage';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { departments as seedDepartments, ui } from '@/data/map';
+import { dispatchJarvis } from '@/lib/gateway';
+import {
+  fetchRuntimeRuns,
+  fetchSystemOverview,
+  fetchVaultTree,
+  mergeVaultTreeIntoDepartments,
+} from '@/lib/os3-adapter';
+import { resolveStatus } from '@/lib/storage';
 import { parseOpenParam, serializeOpenParam } from '@/lib/url';
-import type { DepartmentId, Status } from '@/lib/types';
+import type { DepartmentId, GatewayMode, Status } from '@/lib/types';
 import { useChrome } from './ChromeShell';
 import { ConstellationCanvas, type FlyRequest } from './ConstellationCanvas';
+import { JarvisDock } from './JarvisDock';
+import { JarvisView } from './JarvisView';
 import { JobPanel } from './JobPanel';
 import { SearchBar } from './SearchBar';
 import { SectorCycler } from './SectorCycler';
 import { SkillViewer } from './SkillViewer';
 
-const ALL: DepartmentId[] = departments.map((dept) => dept.id);
-const JOBS = new Map(departments.flatMap((dept, index) => dept.jobs.map((job) => [job.id, { job, dept, index }] as const)));
-const TITLES = new Map([...JOBS].map(([id, entry]) => [id, entry.job.title] as const));
+const ALL: DepartmentId[] = seedDepartments.map((dept) => dept.id);
 
-/** Views 1-5: owns map state and wires the canvas, search, cycler, job panel and skill sheet together. */
+/** Views 1-5 + Jarvis operator dock & console: owns map state and wires the canvas, search, cycler, job panel, skill sheet and Jarvis together. */
 export function MapScreen() {
-  const { active, setActive } = useChrome();
+  const { active, setActive, jarvisOpen, setJarvisOpen } = useChrome();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
@@ -28,12 +35,52 @@ export function MapScreen() {
   const [focusId, setFocusId] = useState<DepartmentId | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [viewer, setViewer] = useState(false);
+  const [departments, setDepartments] = useState(seedDepartments);
   const [statuses, setStatuses] = useState<Record<string, Status>>({});
+  const [gatewayMode, setGatewayMode] = useState<GatewayMode>('local-vault');
+  const [vaultTotalFiles, setVaultTotalFiles] = useState<number>(0);
+  const [pendingApprovals, setPendingApprovals] = useState<number>(0);
+  const [loadingSync, setLoadingSync] = useState<boolean>(true);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [strip, setStrip] = useState(0);
   const [fly, setFly] = useState<FlyRequest | null>(null);
 
-  // Read after mount: localStorage does not exist during prerender.
-  useEffect(() => setStatuses(readStatusOverrides()), []);
+  const syncWithOs3Backend = useCallback(async () => {
+    setLoadingSync(true);
+    setSyncError(null);
+    const [overviewRes, treeRes, runsRes] = await Promise.all([
+      fetchSystemOverview(),
+      fetchVaultTree(),
+      fetchRuntimeRuns(50),
+    ]);
+
+    if (treeRes.ok && treeRes.data) {
+      const merged = mergeVaultTreeIntoDepartments(seedDepartments, treeRes.data, runsRes.data);
+      setDepartments(merged.departments);
+      setStatuses(merged.liveStatuses);
+      setGatewayMode('live-gateway');
+      setVaultTotalFiles(overviewRes.data?.indexStats.totalFiles ?? treeRes.data.totalFiles);
+      setPendingApprovals(overviewRes.data?.runtime.pendingApprovals ?? 0);
+    } else if (overviewRes.ok && overviewRes.data) {
+      setGatewayMode('live-gateway');
+      setVaultTotalFiles(overviewRes.data.indexStats.totalFiles);
+      setPendingApprovals(overviewRes.data.runtime.pendingApprovals);
+    } else {
+      setGatewayMode('local-vault');
+      setSyncError(treeRes.error ?? overviewRes.error ?? null);
+    }
+    setLoadingSync(false);
+  }, []);
+
+  useEffect(() => {
+    void syncWithOs3Backend();
+  }, [syncWithOs3Backend]);
+
+  const jobMap = useMemo(
+    () => new Map(departments.flatMap((dept, index) => dept.jobs.map((job) => [job.id, { job, dept, index }] as const))),
+    [departments],
+  );
+  const titles = useMemo(() => new Map([...jobMap].map(([id, entry]) => [id, entry.job.title] as const)), [jobMap]);
 
   const commitOpen = useCallback(
     (next: DepartmentId[]) => {
@@ -63,7 +110,7 @@ export function MapScreen() {
 
   const selectJob = useCallback(
     (jobId: string, options: { fly?: boolean } = {}) => {
-      const entry = JOBS.get(jobId);
+      const entry = jobMap.get(jobId);
       if (!entry) return;
       setActive(entry.index);
       // A job inside a collapsed sector would open a panel for a node nobody can see.
@@ -73,7 +120,7 @@ export function MapScreen() {
       setViewer(false);
       setSelectedId(jobId);
     },
-    [open, focusId, commitOpen, setActive],
+    [jobMap, open, focusId, commitOpen, setActive],
   );
 
   const cycle = useCallback(
@@ -100,25 +147,31 @@ export function MapScreen() {
   const changeStatus = useCallback(
     (status: Status) => {
       if (!selectedId) return;
-      const next = { ...statuses, [selectedId]: status };
-      // State first: the node restyles even when the write fails (quota, private mode).
-      setStatuses(next);
-      writeStatusOverrides(next);
+      const entry = jobMap.get(selectedId);
+      setStatuses((prev) => ({ ...prev, [selectedId]: status }));
+      if (gatewayMode === 'live-gateway' && entry) {
+        void dispatchJarvis({
+          prompt: `xyp3rn> record status update ${entry.job.title} (${selectedId}) -> ${status}`,
+          activeSector: entry.dept.id,
+          selectedJobId: selectedId,
+        });
+      }
     },
-    [selectedId, statuses],
+    [selectedId, jobMap, gatewayMode],
   );
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        // One layer per press: skill sheet, then panel, then focus.
-        if (viewer) setViewer(false);
+        // One layer per press: Jarvis console, skill sheet, then panel, then focus.
+        if (jarvisOpen) setJarvisOpen(false);
+        else if (viewer) setViewer(false);
         else if (selectedId) setSelectedId(null);
         else if (focusId) setFocusId(null);
         return;
       }
       const typing = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
-      if (typing || selectedId) return;
+      if (typing || selectedId || jarvisOpen) return;
       if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
         event.preventDefault();
         cycle(event.key === 'ArrowLeft' ? -1 : 1);
@@ -126,9 +179,9 @@ export function MapScreen() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [viewer, selectedId, focusId, cycle]);
+  }, [jarvisOpen, setJarvisOpen, viewer, selectedId, focusId, cycle]);
 
-  const selected = selectedId ? JOBS.get(selectedId) : undefined;
+  const selected = selectedId ? jobMap.get(selectedId) : undefined;
   const activeDept = departments[active] ?? departments[0]!;
   const allOpen = open.length === ALL.length;
 
@@ -157,6 +210,30 @@ export function MapScreen() {
         )}
       </div>
 
+      <div className="frost absolute right-3 top-[60px] z-20 hidden items-center gap-2 rounded-full px-3 py-1.5 font-mono text-[10px] text-ink-dim md:right-4 md:top-4 md:flex">
+        <span
+          aria-hidden="true"
+          className={`h-1.5 w-1.5 rounded-full ${gatewayMode === 'live-gateway' ? 'bg-[#3ECFB2]' : 'bg-accent'}`}
+        />
+        <span>
+          {loadingSync
+            ? 'SYNCING OS3…'
+            : gatewayMode === 'live-gateway'
+              ? `OS3 LIVE · ${vaultTotalFiles} FILES · ${pendingApprovals} PENDING`
+              : 'SEED FALLBACK'}
+        </span>
+        {syncError && !loadingSync && (
+          <button
+            type="button"
+            onClick={() => void syncWithOs3Backend()}
+            className="underline hover:text-ink"
+            title={syncError}
+          >
+            RETRY
+          </button>
+        )}
+      </div>
+
       {!focusId && (
         <div className="absolute left-1/2 top-[112px] z-20 -translate-x-1/2 md:top-[62px]">
           <button
@@ -173,14 +250,22 @@ export function MapScreen() {
         <SectorCycler department={activeDept} onPrevious={() => cycle(-1)} onNext={() => cycle(1)} />
       </div>
 
+      <JarvisDock
+        activeSector={activeDept.id}
+        selectedJobId={selectedId}
+        onOpenConsole={() => setJarvisOpen(true)}
+        onSelectJob={(jobId) => selectJob(jobId, { fly: true })}
+        onFocusSector={focusSector}
+      />
+
       {selected && (
         <JobPanel
           key={selected.job.id}
           job={selected.job}
           department={selected.dept}
           status={resolveStatus(selected.job, statuses)}
-          titles={TITLES}
-          trapFocus={!viewer}
+          titles={titles}
+          trapFocus={!viewer && !jarvisOpen}
           onClose={() => setSelectedId(null)}
           onNavigate={selectJob}
           onStatus={changeStatus}
@@ -188,6 +273,21 @@ export function MapScreen() {
         />
       )}
       {selected && viewer && <SkillViewer job={selected.job} onClose={() => setViewer(false)} />}
+      {jarvisOpen && (
+        <JarvisView
+          activeSector={activeDept.id}
+          selectedJobId={selectedId}
+          onClose={() => setJarvisOpen(false)}
+          onSelectJob={(jobId) => {
+            setJarvisOpen(false);
+            selectJob(jobId, { fly: true });
+          }}
+          onFocusSector={(sectorId) => {
+            setJarvisOpen(false);
+            focusSector(sectorId);
+          }}
+        />
+      )}
     </div>
   );
 }
