@@ -261,7 +261,7 @@ describe('Phase 11 UI-xyp3rn Live Integration', () => {
     expect(await screen.findByText('Neon Static')).toBeInTheDocument();
   });
 
-  it('handles gateway failure state cleanly with retry action', async () => {
+  it('handles gateway failure state cleanly with retry action and local seed telemetry fallback', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {
@@ -273,14 +273,27 @@ describe('Phase 11 UI-xyp3rn Live Integration', () => {
     const alert = await screen.findByRole('alert');
     expect(within(alert).getByText(/Gateway down/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'RETRY CONNECTION' })).toBeInTheDocument();
+    // Dashboards remain usable in Local Seed fallback instead of rendering blank
+    expect(screen.getByText('LOCAL SEED')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('tab', { name: 'RECORDS' }));
+    expect(screen.getByText('Neon Static')).toBeInTheDocument();
   });
 
-  it('renders KnowledgeGraphView with interactive SVG topology, keyboard selection, and Entity Inspector', async () => {
+  it('renders KnowledgeGraphView with interactive SVG topology, zoom controls, search filter, and Entity Inspector', async () => {
     mockLiveGatewayFetch();
     render(<KnowledgeGraphView />);
 
     const nodeBtn = await screen.findByRole('button', { name: /Node Alpha, 01_CORE, 1 links/ });
     expect(nodeBtn).toBeInTheDocument();
+
+    expect(screen.getByRole('button', { name: 'Zoom in graph' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Zoom out graph' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reset graph zoom' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Filter knowledge graph nodes')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Zoom in graph' }));
+    expect(screen.getByText('128%')).toBeInTheDocument();
+
     await userEvent.click(nodeBtn);
     expect(await screen.findByText(/Live content from Vault/i)).toBeInTheDocument();
   });

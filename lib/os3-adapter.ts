@@ -89,7 +89,7 @@ async function fetchJson<T>(path: string, options: AdapterOptions = {}): Promise
     return { ok: false, mode: 'local-vault', data: null, error: 'Fetch API unavailable in current environment.' };
   }
 
-  const timeoutMs = options.timeoutMs ?? MOTION.gatewayTimeoutMs * 2;
+  const timeoutMs = options.timeoutMs ?? Math.max(8000, MOTION.gatewayTimeoutMs * 4);
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : undefined;
   const timer = controller ? globalThis.setTimeout(() => controller.abort(), timeoutMs) : undefined;
 

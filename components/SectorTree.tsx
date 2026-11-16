@@ -220,7 +220,28 @@ export const SectorTree = memo(function SectorTree({
                   ) : (
                     <OverviewDot status={status} r={dot} />
                   )}
+                  <circle
+                    r={focus ? DISC : dot}
+                    fill="url(#sphere-3d-solid)"
+                    opacity={focus ? 0.52 : 0.78}
+                    pointerEvents="none"
+                  />
                 </g>
+                {!focus && (
+                  <text
+                    className="overview-zoom-label svg-micro"
+                    aria-hidden="true"
+                    y={dot + 10}
+                    textAnchor="middle"
+                    fontSize={6.5}
+                    fill={node.stub ? TOKENS.inkDim : TOKENS.ink}
+                    stroke={TOKENS.bg}
+                    strokeWidth={2.5}
+                    paintOrder="stroke"
+                  >
+                    {node.title}
+                  </text>
+                )}
                 {focus && node.startHere && (
                   <text
                     className="svg-micro"
@@ -378,9 +399,20 @@ export const SectorTree = memo(function SectorTree({
                 }
           }
         >
-          <circle r={HUB + 8} fill={department.color} opacity={0.2} filter="url(#glow)" pointerEvents="none" />
+          <circle r={HUB + 10} fill={department.color} opacity={0.22} filter="url(#glow)" pointerEvents="none" />
+          <ellipse
+            rx={HUB + 9}
+            ry={Math.round((HUB + 9) * 0.42)}
+            fill="none"
+            stroke={department.color}
+            strokeOpacity={0.34}
+            strokeWidth={0.9}
+            transform="rotate(-16)"
+            pointerEvents="none"
+          />
           <circle className="focus-ring" r={HUB + 5} stroke={department.color} />
-          <circle r={HUB} fill={TOKENS.bg} stroke={department.color} strokeWidth={1.5} />
+          <circle r={HUB} fill="url(#hub-3d-glass)" stroke={department.color} strokeWidth={1.6} />
+          <circle r={HUB} fill="url(#sphere-3d-solid)" opacity={0.46} pointerEvents="none" />
           <g ref={glyphRef}>
             <HubIcon x={-10} y={-10} size={20} strokeWidth={1.25} absoluteStrokeWidth color={department.color} />
           </g>

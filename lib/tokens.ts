@@ -2,11 +2,11 @@ import type { DepartmentId } from './types';
 
 /** Core palette. Tailwind and inline SVG both read from here so the two cannot drift. */
 export const TOKENS = {
-  bg: '#20232E',
-  ink: '#EFEBE2',
-  inkDim: '#8B8F9C',
-  hairline: 'rgba(239,235,226,0.14)',
-  accent: '#F59B5C',
+  bg: '#090C14',
+  ink: '#F4F1EA',
+  inkDim: '#A6ADBF',
+  hairline: 'rgba(244,241,234,0.16)',
+  accent: '#FFAC5E',
 } as const;
 
 /** The six vault sector colors, keyed by sector id. */

@@ -143,7 +143,7 @@ export function SkillViewer({ job, onClose }: SkillViewerProps) {
       aria-labelledby="skill-viewer-title"
       tabIndex={-1}
       // Near-opaque: the sheet lies over the job panel, which would otherwise show through the frost.
-      style={{ background: 'rgba(32, 35, 46, 0.97)' }}
+      style={{ background: 'linear-gradient(160deg, rgba(16, 20, 32, 0.95), rgba(8, 10, 18, 0.97))' }}
       className="frost sheet-in fixed inset-x-0 bottom-0 top-0 z-[60] flex flex-col outline-none md:left-auto md:w-[min(720px,100vw)]"
     >
       <header className="flex flex-wrap items-center gap-3 border-b border-hairline px-5 py-4 md:px-8">

@@ -1,94 +1,114 @@
 'use client';
 
-import { RefreshCw, ShieldAlert } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { departments as seedDepartments } from '@/data/map';
+import { ArrowUpRight, Minus, Network, Plus, RefreshCw, RotateCcw, Search, Sparkles } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from 'react';
 import { fetchVaultNote } from '@/lib/gateway';
 import { fetchKnowledgeGraph } from '@/lib/os3-adapter';
-import { SECTOR_COLORS, TOKENS } from '@/lib/tokens';
+import { SECTOR_COLORS } from '@/lib/tokens';
 import type {
   DepartmentId,
   Os3KnowledgeGraphEdge,
   Os3KnowledgeGraphNode,
+  Os3KnowledgeGraphResponse,
   VaultNotePayload,
 } from '@/lib/types';
+
+const SECTORS: Array<{ id: DepartmentId | 'ALL'; label: string }> = [
+  { id: 'ALL', label: 'ALL SECTORS' },
+  { id: '01_CORE', label: '01_CORE' },
+  { id: '02_KNOWLEDGE_LAYER', label: '02_KNOWLEDGE_LAYER' },
+  { id: '03_RESEARCH_INTELLIGENCE', label: '03_RESEARCH_INTELLIGENCE' },
+  { id: '04_RESEARCH_MATERIAL', label: '04_RESEARCH_MATERIAL' },
+  { id: '05_XYP3RN_RECORDS', label: '05_XYP3RN_RECORDS' },
+  { id: '06_GOVERNANCE', label: '06_GOVERNANCE' },
+];
 
 type PositionedNode = Os3KnowledgeGraphNode & {
   x: number;
   y: number;
+  r: number;
   color: string;
 };
 
-const ALL_SECTORS: readonly DepartmentId[] = seedDepartments.map((d) => d.id);
+const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 
-function buildSeedFallbackGraph(sectorFilter: DepartmentId | 'ALL'): {
-  nodes: Os3KnowledgeGraphNode[];
-  edges: Os3KnowledgeGraphEdge[];
-} {
-  const filteredDepts =
-    sectorFilter === 'ALL' ? seedDepartments : seedDepartments.filter((d) => d.id === sectorFilter);
-  const jobById = new Map(seedDepartments.flatMap((d) => d.jobs.map((j) => [j.id, { job: j, sector: d.id }] as const)));
-  const edges: Os3KnowledgeGraphEdge[] = [];
-  const deg = new Map<string, number>();
-
-  for (const dept of filteredDepts) {
-    for (const job of dept.jobs) {
-      for (const depId of job.buildsOn) {
-        const target = jobById.get(depId);
-        if (!target) continue;
-        edges.push({ source: job.file, target: target.job.file, rawTarget: target.job.title });
-        deg.set(job.file, (deg.get(job.file) ?? 0) + 1);
-        deg.set(target.job.file, (deg.get(target.job.file) ?? 0) + 1);
-      }
-    }
+function computeGraphPositions(
+  nodes: Os3KnowledgeGraphNode[],
+  width = 960,
+  height = 640,
+): Map<string, PositionedNode> {
+  const cx = width / 2;
+  const cy = height / 2;
+  const sectorGroups = new Map<string, Os3KnowledgeGraphNode[]>();
+  for (const node of nodes) {
+    const group = sectorGroups.get(node.sector) ?? [];
+    group.push(node);
+    sectorGroups.set(node.sector, group);
   }
 
-  const nodes: Os3KnowledgeGraphNode[] = filteredDepts.flatMap((dept) =>
-    dept.jobs.slice(0, 14).map((job) => ({
-      id: job.file,
-      title: job.title,
-      sector: dept.id,
-      domain: dept.id,
-      docType: job.cluster,
-      status: job.status,
-      degree: deg.get(job.file) ?? 0,
-    })),
-  );
-  const idSet = new Set(nodes.map((n) => n.id));
-  return {
-    nodes,
-    edges: edges.filter((e) => idSet.has(e.source) && idSet.has(e.target)),
-  };
+  const sectorNames = [...sectorGroups.keys()].sort();
+  const result = new Map<string, PositionedNode>();
+
+  sectorNames.forEach((sectorName, sectorIdx) => {
+    const group = sectorGroups.get(sectorName) ?? [];
+    const baseAngle = (sectorIdx / Math.max(1, sectorNames.length)) * Math.PI * 2 - Math.PI / 2;
+    const color = SECTOR_COLORS[sectorName as DepartmentId] ?? '#9B8CFF';
+
+    group.forEach((node, idx) => {
+      const ring = idx % 3;
+      const spread = (idx / Math.max(1, group.length) - 0.5) * 0.92;
+      const angle = baseAngle + spread;
+      const dist = 108 + ring * 80 + Math.min(48, node.degree * 5);
+      const r = Math.min(18, 6.5 + node.degree * 1.15);
+      result.set(node.id, {
+        ...node,
+        x: cx + Math.cos(angle) * dist,
+        y: cy + Math.sin(angle) * dist,
+        r,
+        color,
+      });
+    });
+  });
+
+  return result;
 }
 
-/** View 7: Vault Knowledge Graph visualising wikilinks and cross-sector relations in Constellation aesthetics. */
 export function KnowledgeGraphView() {
   const [sectorFilter, setSectorFilter] = useState<DepartmentId | 'ALL'>('ALL');
+  const [queryFilter, setQueryFilter] = useState('');
+  const [graph, setGraph] = useState<Os3KnowledgeGraphResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isLive, setIsLive] = useState(false);
-  const [nodes, setNodes] = useState<Os3KnowledgeGraphNode[]>([]);
-  const [edges, setEdges] = useState<Os3KnowledgeGraphEdge[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [selectedNote, setSelectedNote] = useState<VaultNotePayload | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [note, setNote] = useState<VaultNotePayload | null>(null);
+  const [noteLoading, setNoteLoading] = useState(false);
+
+  // Interactive Zoom & Pan state
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const dragRef = useRef<{ active: boolean; moved: boolean; startX: number; startY: number; origX: number; origY: number }>({
+    active: false,
+    moved: false,
+    startX: 0,
+    startY: 0,
+    origX: 0,
+    origY: 0,
+  });
+  const svgWrapRef = useRef<HTMLDivElement>(null);
 
   const loadGraph = useCallback(async () => {
     setLoading(true);
     setError(null);
     const res = await fetchKnowledgeGraph({
       sector: sectorFilter === 'ALL' ? undefined : sectorFilter,
-      limit: 120,
+      limit: 180,
     });
-    if (res.ok && res.data) {
-      setIsLive(true);
-      setNodes(res.data.nodes);
-      setEdges(res.data.edges);
+    if (!res.ok || !res.data) {
+      setError(res.error ?? 'Failed to fetch Vault Knowledge Graph.');
+      setGraph(null);
     } else {
-      setIsLive(false);
-      setError(res.error ?? 'OS3 Gateway offline; showing seed dependency graph.');
-      const fallback = buildSeedFallbackGraph(sectorFilter);
-      setNodes(fallback.nodes);
-      setEdges(fallback.edges);
+      setGraph(res.data);
     }
     setLoading(false);
   }, [sectorFilter]);
@@ -97,225 +117,411 @@ export function KnowledgeGraphView() {
     void loadGraph();
   }, [loadGraph]);
 
+  const selectNode = useCallback(async (nodeId: string) => {
+    setSelectedId(nodeId);
+    setNote(null);
+    setNoteLoading(true);
+    try {
+      const payload = await fetchVaultNote(nodeId);
+      setNote(payload);
+    } finally {
+      setNoteLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    if (!selectedId) {
-      setSelectedNote(null);
-      return;
-    }
-    let active = true;
-    void fetchVaultNote(selectedId).then((note) => {
-      if (active) setSelectedNote(note);
-    });
-    return () => {
-      active = false;
+    const el = svgWrapRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const factor = Math.exp(-e.deltaY * 0.0014);
+      setZoom((prev) => clamp(prev * factor, 0.45, 3.6));
     };
-  }, [selectedId]);
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
 
-  const positioned = useMemo<PositionedNode[]>(() => {
-    const grouped = new Map<string, Os3KnowledgeGraphNode[]>();
-    for (const node of nodes) {
-      const list = grouped.get(node.sector) ?? [];
-      list.push(node);
-      grouped.set(node.sector, list);
+  const nodes = useMemo(() => graph?.nodes ?? [], [graph]);
+  const edges = useMemo(() => graph?.edges ?? [], [graph]);
+
+  const needle = queryFilter.trim().toLowerCase();
+  const matchedIds = useMemo(() => {
+    if (!needle) return null;
+    const set = new Set<string>();
+    for (const n of nodes) {
+      if (
+        n.title.toLowerCase().includes(needle) ||
+        n.id.toLowerCase().includes(needle) ||
+        n.sector.toLowerCase().includes(needle) ||
+        (n.domain ?? '').toLowerCase().includes(needle)
+      ) {
+        set.add(n.id);
+      }
     }
+    return set;
+  }, [nodes, needle]);
 
-    const sectors = [...grouped.keys()].sort();
-    const out: PositionedNode[] = [];
-    const cx = 420;
-    const cy = 280;
+  const positioned = useMemo(() => computeGraphPositions(nodes), [nodes]);
+  const activeNodeId = hoveredId ?? selectedId;
 
-    sectors.forEach((sec, sIdx) => {
-      const list = grouped.get(sec) ?? [];
-      const sectorAngle = (sIdx / Math.max(1, sectors.length)) * Math.PI * 2 - Math.PI / 2;
-      const anchorX = sectors.length === 1 ? cx : cx + Math.cos(sectorAngle) * 140;
-      const anchorY = sectors.length === 1 ? cy : cy + Math.sin(sectorAngle) * 110;
-      const color = SECTOR_COLORS[sec as DepartmentId] ?? TOKENS.accent;
+  const connectedToActive = useMemo(() => {
+    const connected = new Set<string>();
+    if (!activeNodeId) return connected;
+    connected.add(activeNodeId);
+    for (const e of edges) {
+      if (e.source === activeNodeId) connected.add(e.target);
+      if (e.target === activeNodeId) connected.add(e.source);
+    }
+    return connected;
+  }, [activeNodeId, edges]);
 
-      list.forEach((node, nIdx) => {
-        const ring = Math.floor(nIdx / 10);
-        const angle = (nIdx % 10) * ((Math.PI * 2) / Math.min(10, list.length || 1)) + ring * 0.45;
-        const radius = 38 + ring * 34 + (node.degree > 0 ? 0 : 12);
-        out.push({
-          ...node,
-          x: anchorX + Math.cos(angle) * radius,
-          y: anchorY + Math.sin(angle) * radius,
-          color,
-        });
+  const activeNodeEdges = useMemo(() => {
+    if (!selectedId) return { outgoing: [] as PositionedNode[], incoming: [] as PositionedNode[] };
+    const outgoing: PositionedNode[] = [];
+    const incoming: PositionedNode[] = [];
+    for (const edge of edges) {
+      if (edge.source === selectedId) {
+        const target = positioned.get(edge.target);
+        if (target) outgoing.push(target);
+      } else if (edge.target === selectedId) {
+        const source = positioned.get(edge.source);
+        if (source) incoming.push(source);
+      }
+    }
+    return { outgoing, incoming };
+  }, [selectedId, edges, positioned]);
+
+  const onPointerDown = (e: PointerEvent<SVGSVGElement>) => {
+    if (e.button !== 0) return;
+    dragRef.current = {
+      active: true,
+      moved: false,
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: pan.x,
+      origY: pan.y,
+    };
+  };
+
+  const onPointerMove = (e: PointerEvent<SVGSVGElement>) => {
+    if (!dragRef.current.active) return;
+    const dx = e.clientX - dragRef.current.startX;
+    const dy = e.clientY - dragRef.current.startY;
+    if (!dragRef.current.moved && Math.hypot(dx, dy) > 4) {
+      dragRef.current.moved = true;
+    }
+    if (dragRef.current.moved) {
+      setPan({
+        x: clamp(dragRef.current.origX + dx, -700, 700),
+        y: clamp(dragRef.current.origY + dy, -500, 500),
       });
-    });
+    }
+  };
 
-    return out;
-  }, [nodes]);
-
-  const nodeMap = useMemo(() => new Map(positioned.map((n) => [n.id, n] as const)), [positioned]);
-  const selectedNode = selectedId ? nodeMap.get(selectedId) ?? null : null;
+  const onPointerUp = () => {
+    dragRef.current.active = false;
+  };
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto px-4 pb-8 pt-20 md:px-8 md:pt-20">
-      <header className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-hairline pb-4">
-        <div>
-          <p className="micro text-accent">
-            VAULT KNOWLEDGE GRAPH · {isLive ? 'OS3 LIVE INDEX' : 'SEED FALLBACK'}
-          </p>
-          <h1 className="mt-1 font-serif text-2xl font-light uppercase tracking-label text-ink md:text-3xl">
-            Entity &amp; Wikilink Topology
-          </h1>
-        </div>
-        <button
-          type="button"
-          onClick={() => void loadGraph()}
-          className="frost micro flex items-center gap-2 rounded-full px-4 py-2 text-ink hover:border-accent"
-        >
-          <RefreshCw size={13} strokeWidth={1.5} className={loading ? 'animate-spin' : ''} aria-hidden="true" />
-          {loading ? 'LOADING…' : 'REFRESH GRAPH'}
-        </button>
-      </header>
-
-      {error && (
-        <div role="status" className="frost mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg px-4 py-2.5 text-xs text-ink-dim">
-          <span className="flex items-center gap-2">
-            <ShieldAlert size={14} className="text-accent" aria-hidden="true" />
-            {error}
-          </span>
-          <button type="button" onClick={() => void loadGraph()} className="micro underline hover:text-ink">
-            RETRY
-          </button>
-        </div>
-      )}
-
-      <div className="mb-4 flex flex-wrap items-center gap-1.5" role="group" aria-label="Sector filter">
-        <button
-          type="button"
-          onClick={() => setSectorFilter('ALL')}
-          className={`micro rounded-full px-3 py-1.5 ${
-            sectorFilter === 'ALL' ? 'bg-ink font-bold text-bg' : 'frost text-ink-dim hover:text-ink'
-          }`}
-        >
-          ALL SECTORS ({nodes.length})
-        </button>
-        {ALL_SECTORS.map((sec) => (
-          <button
-            key={sec}
-            type="button"
-            onClick={() => setSectorFilter(sec)}
-            style={sectorFilter === sec ? { borderColor: SECTOR_COLORS[sec], color: SECTOR_COLORS[sec] } : undefined}
-            className={`micro rounded-full px-3 py-1.5 ${
-              sectorFilter === sec ? 'frost font-bold' : 'frost text-ink-dim hover:text-ink'
-            }`}
-          >
-            {sec}
-          </button>
-        ))}
-      </div>
-
-      <div className="grid min-h-[420px] flex-1 grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="frost relative flex flex-col overflow-hidden rounded-[14px] lg:col-span-2">
-          {positioned.length === 0 && !loading ? (
-            <div className="grid flex-1 place-items-center p-8 font-mono text-xs text-ink-dim">
-              No Vault nodes found in this sector yet.
+    <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden text-ink">
+      {/* Frosted Knowledge Graph Header */}
+      <header className="frost z-10 shrink-0 border-x-0 border-t-0 px-4 pb-3.5 pt-16 sm:px-8 sm:pt-20">
+        <div className="mx-auto flex max-w-[1520px] flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="grid h-10 w-10 place-items-center rounded-2xl border border-violet-400/40 bg-violet-500/15 text-violet-300 shadow-[0_0_24px_rgba(155,140,255,0.22)]">
+              <Network size={19} />
             </div>
-          ) : (
-            <svg
-              viewBox="0 0 840 560"
-              role="img"
-              aria-label="Vault Knowledge Graph"
-              className="h-full min-h-[380px] w-full"
+            <div>
+              <h1 className="text-lg font-semibold tracking-tight text-ink sm:text-xl">
+                OS 3.0 VAULT KNOWLEDGE TOPOLOGY
+              </h1>
+              <p className="font-mono text-xs text-ink-dim">
+                {graph
+                  ? `${graph.nodeCount} nodes · ${graph.edgeCount} wikilinks · ${graph.totalIndexed} Vault indexed`
+                  : 'Inspecting structural wikilinks across Vault…'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative">
+              <Search size={13} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-dim" />
+              <input
+                type="search"
+                value={queryFilter}
+                onChange={(e) => setQueryFilter(e.target.value)}
+                placeholder="Highlight node or sector…"
+                aria-label="Filter knowledge graph nodes"
+                className="w-48 rounded-xl border border-white/15 bg-black/30 py-1.5 pl-8 pr-3 text-xs text-ink placeholder:text-ink-dim/75 focus:border-accent/60 focus:outline-none sm:w-56"
+              />
+            </div>
+
+            <select
+              aria-label="Sector filter"
+              value={sectorFilter}
+              onChange={(e) => setSectorFilter(e.target.value as DepartmentId | 'ALL')}
+              className="rounded-xl border border-white/15 bg-[#0e1220] px-3 py-1.5 font-mono text-xs text-ink focus:border-accent/60 focus:outline-none"
             >
-              {edges.map((edge, idx) => {
-                const a = nodeMap.get(edge.source);
-                const b = nodeMap.get(edge.target);
-                if (!a || !b) return null;
-                const highlighted = selectedId === a.id || selectedId === b.id;
-                return (
-                  <line
-                    key={`${edge.source}-${edge.target}-${idx}`}
-                    x1={a.x}
-                    y1={a.y}
-                    x2={b.x}
-                    y2={b.y}
-                    stroke={highlighted ? TOKENS.accent : TOKENS.ink}
-                    strokeOpacity={highlighted ? 0.85 : 0.16}
-                    strokeWidth={highlighted ? 1.6 : 0.8}
-                  />
-                );
-              })}
-              {positioned.map((node) => {
-                const selected = node.id === selectedId;
-                const radius = selected ? 7 : Math.min(6, 3 + node.degree * 0.6);
-                return (
-                  <g
-                    key={node.id}
-                    role="button"
-                    tabIndex={0}
-                    aria-label={`${node.title}, ${node.sector}, ${node.degree} links`}
-                    onClick={() => setSelectedId(node.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        setSelectedId(node.id);
-                      }
-                    }}
-                    className="cursor-pointer outline-none"
-                  >
-                    <circle
-                      cx={node.x}
-                      cy={node.y}
-                      r={radius}
-                      fill={selected ? TOKENS.accent : node.color}
-                      fillOpacity={selected ? 1 : 0.85}
-                      stroke={TOKENS.bg}
-                      strokeWidth={1.2}
-                    />
-                    {(selected || node.degree >= 2) && (
-                      <text
-                        x={node.x + 8}
-                        y={node.y + 3}
-                        fill={TOKENS.ink}
-                        fontSize="10"
-                        fontFamily="monospace"
-                        opacity={selected ? 1 : 0.72}
-                      >
-                        {node.title.slice(0, 22)}
-                      </text>
-                    )}
-                  </g>
-                );
-              })}
-            </svg>
-          )}
-          <div className="flex items-center justify-between border-t border-hairline px-4 py-2 font-mono text-[11px] text-ink-dim">
-            <span>{positioned.length} nodes</span>
-            <span>{edges.length} wikilink edges</span>
+              {SECTORS.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+
+            <button
+              type="button"
+              onClick={() => void loadGraph()}
+              className="flex items-center gap-1.5 rounded-xl border border-white/15 bg-white/[0.05] px-3 py-1.5 font-mono text-xs text-ink transition hover:border-accent/50 hover:bg-white/[0.1]"
+            >
+              <RefreshCw size={13} className={loading ? 'animate-spin text-accent' : 'text-accent'} />
+              RELOAD
+            </button>
           </div>
         </div>
+      </header>
 
-        <aside className="frost flex flex-col rounded-[14px] p-5">
-          <h2 className="micro text-ink-dim">ENTITY INSPECTOR</h2>
-          {!selectedNode ? (
-            <p className="mt-4 font-mono text-xs text-ink-dim">
-              Select any constellation node to inspect Vault path, wikilink relations, and document body.
-            </p>
-          ) : (
-            <div className="mt-3 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
-              <div>
-                <p className="font-mono text-[11px]" style={{ color: selectedNode.color }}>
-                  {selectedNode.sector}
-                </p>
-                <h3 className="mt-1 text-lg font-semibold text-ink">{selectedNode.title}</h3>
-                <p className="mt-1 break-all font-mono text-[11px] text-ink-dim">{selectedNode.id}</p>
-              </div>
-              <div className="flex flex-wrap gap-1.5 font-mono text-[11px]">
-                <span className="chip">{selectedNode.docType ?? 'note'}</span>
-                <span className="chip">{selectedNode.degree} links</span>
-                {selectedNote && <span className="chip">sha256:{selectedNote.sha256.slice(0, 10)}</span>}
-              </div>
-              {selectedNote && (
-                <pre className="outlined max-h-64 overflow-auto bg-bg/40 p-3 font-mono text-[11px] leading-relaxed text-ink">
-                  {selectedNote.body || selectedNote.rawContent}
-                </pre>
-              )}
+      {/* Main Split Workspace */}
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 p-4 sm:p-6 lg:grid-cols-12">
+        {/* Interactive 3D Topology Canvas */}
+        <section
+          ref={svgWrapRef}
+          aria-label="Knowledge graph topology"
+          className="glass-card relative min-h-[380px] overflow-hidden rounded-2xl lg:col-span-8"
+        >
+          {/* Floating Graph Zoom Controls */}
+          <div
+            role="toolbar"
+            aria-label="Knowledge graph zoom controls"
+            className="frost absolute right-3 top-3 z-10 flex items-center gap-1 rounded-full px-1.5 py-1"
+          >
+            <button
+              type="button"
+              aria-label="Zoom out graph"
+              onClick={() => setZoom((z) => clamp(z / 1.28, 0.45, 3.6))}
+              className="grid h-7 w-7 place-items-center rounded-full text-ink-dim transition hover:bg-white/10 hover:text-ink"
+            >
+              <Minus size={13} />
+            </button>
+            <span className="min-w-[42px] text-center font-mono text-[10px] tabular-nums text-ink">
+              {Math.round(zoom * 100)}%
+            </span>
+            <button
+              type="button"
+              aria-label="Zoom in graph"
+              onClick={() => setZoom((z) => clamp(z * 1.28, 0.45, 3.6))}
+              className="grid h-7 w-7 place-items-center rounded-full text-ink-dim transition hover:bg-white/10 hover:text-ink"
+            >
+              <Plus size={13} />
+            </button>
+            <button
+              type="button"
+              aria-label="Reset graph zoom"
+              onClick={() => {
+                setZoom(1);
+                setPan({ x: 0, y: 0 });
+              }}
+              className="grid h-7 w-7 place-items-center rounded-full text-ink-dim transition hover:bg-white/10 hover:text-ink"
+            >
+              <RotateCcw size={12} />
+            </button>
+          </div>
+
+          {error && (
+            <div
+              role="alert"
+              className="m-4 rounded-xl border border-rose-400/35 bg-rose-950/35 p-4 font-mono text-xs text-rose-100"
+            >
+              {error}
             </div>
           )}
+
+          {!error && (
+            <svg
+              viewBox="0 0 960 640"
+              className="h-full w-full cursor-grab select-none active:cursor-grabbing"
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerLeave={onPointerUp}
+            >
+              <defs>
+                <radialGradient id="kg-sphere-glaze" cx="32%" cy="28%" r="72%">
+                  <stop offset="0%" stopColor="rgba(255,255,255,0.55)" />
+                  <stop offset="45%" stopColor="rgba(255,255,255,0.08)" />
+                  <stop offset="100%" stopColor="rgba(0,0,0,0.5)" />
+                </radialGradient>
+                <filter id="kg-node-glow" x="-60%" y="-60%" width="220%" height="220%">
+                  <feGaussianBlur stdDeviation="4" result="blur" />
+                  <feMerge>
+                    <feMergeNode in="blur" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
+              </defs>
+
+              <g transform={`translate(${(480 + pan.x).toFixed(1)} ${(320 + pan.y).toFixed(1)}) scale(${zoom.toFixed(3)}) translate(-480 -320)`}>
+                {/* Subtle Concentric Orbital Rings */}
+                {[120, 210, 300].map((radius) => (
+                  <circle
+                    key={radius}
+                    cx={480}
+                    cy={320}
+                    r={radius}
+                    fill="none"
+                    stroke="rgba(244,241,234,0.06)"
+                    strokeDasharray="4 6"
+                  />
+                ))}
+
+                {/* Curved Quadratic Bezier Wikilink Edges */}
+                {edges.map((edge: Os3KnowledgeGraphEdge, i) => {
+                  const s = positioned.get(edge.source);
+                  const t = positioned.get(edge.target);
+                  if (!s || !t) return null;
+                  const mx = (s.x + t.x) / 2;
+                  const my = (s.y + t.y) / 2;
+                  const dx = t.x - s.x;
+                  const dy = t.y - s.y;
+                  const cxCtrl = mx - dy * 0.14;
+                  const cyCtrl = my + dx * 0.14;
+                  const isActiveEdge = activeNodeId === edge.source || activeNodeId === edge.target;
+                  const dimmed = Boolean(activeNodeId && !isActiveEdge);
+                  return (
+                    <path
+                      key={`${edge.source}-${edge.target}-${i}`}
+                      d={`M${s.x.toFixed(1)} ${s.y.toFixed(1)} Q${cxCtrl.toFixed(1)} ${cyCtrl.toFixed(1)} ${t.x.toFixed(1)} ${t.y.toFixed(1)}`}
+                      fill="none"
+                      stroke={isActiveEdge ? s.color : 'rgba(244,241,234,0.16)'}
+                      strokeWidth={isActiveEdge ? 1.8 : 0.85}
+                      strokeOpacity={dimmed ? 0.15 : isActiveEdge ? 0.85 : 0.42}
+                      className={isActiveEdge ? 'graph-edge-flow' : undefined}
+                    />
+                  );
+                })}
+
+                {/* 3D Spherical Nodes */}
+                {[...positioned.values()].map((node) => {
+                  const isSelected = selectedId === node.id;
+                  const isConnected = connectedToActive.has(node.id);
+                  const matchesSearch = matchedIds ? matchedIds.has(node.id) : true;
+                  const dimmed =
+                    (activeNodeId && !isConnected) || (matchedIds !== null && !matchesSearch);
+
+                  return (
+                    <g
+                      key={node.id}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`${node.title}, ${node.sector}, ${node.degree} links`}
+                      transform={`translate(${node.x.toFixed(1)} ${node.y.toFixed(1)})`}
+                      style={{ cursor: 'pointer', opacity: dimmed ? 0.25 : 1, transition: 'opacity 180ms ease' }}
+                      onMouseEnter={() => setHoveredId(node.id)}
+                      onMouseLeave={() => setHoveredId((prev) => (prev === node.id ? null : prev))}
+                      onClick={() => {
+                        if (!dragRef.current.moved) {
+                          void selectNode(node.id);
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          void selectNode(node.id);
+                        }
+                      }}
+                    >
+                      {(isSelected || hoveredId === node.id || (matchedIds?.has(node.id) ?? false)) && (
+                        <circle r={node.r + 6} fill="none" stroke={node.color} strokeWidth={1.6} opacity={0.75} />
+                      )}
+                      <circle
+                        r={node.r}
+                        fill={node.color}
+                        filter={isSelected || node.degree >= 3 ? 'url(#kg-node-glow)' : undefined}
+                      />
+                      <circle r={node.r} fill="url(#kg-sphere-glaze)" pointerEvents="none" />
+                      {(isSelected || hoveredId === node.id || node.degree >= 2 || zoom >= 1.35 || (matchedIds?.has(node.id) ?? false)) && (
+                        <text
+                          y={node.r + 12}
+                          textAnchor="middle"
+                          fontSize={10}
+                          fill="#F4F1EA"
+                          stroke="#090C14"
+                          strokeWidth={3}
+                          paintOrder="stroke"
+                          className="pointer-events-none font-mono"
+                        >
+                          {node.title.length > 26 ? `${node.title.slice(0, 24)}…` : node.title}
+                        </text>
+                      )}
+                    </g>
+                  );
+                })}
+              </g>
+            </svg>
+          )}
+        </section>
+
+        {/* Entity Inspector Sidebar */}
+        <aside className="glass-card flex min-h-0 flex-col overflow-hidden rounded-2xl lg:col-span-4">
+          <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+            <div className="flex items-center gap-2">
+              <Sparkles size={14} className="text-accent" />
+              <span className="micro text-ink">ENTITY INSPECTOR</span>
+            </div>
+            {selectedId && (
+              <span className="rounded-full border border-accent/40 bg-accent/15 px-2.5 py-0.5 font-mono text-[10px] text-accent">
+                {positioned.get(selectedId)?.sector ?? 'VAULT'}
+              </span>
+            )}
+          </div>
+
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
+            {!selectedId ? (
+              <div className="rounded-xl border border-dashed border-white/15 bg-white/[0.02] p-5 text-sm leading-relaxed text-ink-dim">
+                Select any node sphere on the topology canvas or scroll/drag to explore the Vault graph in 3D space.
+              </div>
+            ) : (
+              <>
+                <div>
+                  <h2 className="text-base font-semibold text-ink">
+                    {positioned.get(selectedId)?.title ?? selectedId}
+                  </h2>
+                  <p className="mt-0.5 break-all font-mono text-[11px] text-ink-dim">{selectedId}</p>
+                </div>
+
+                {(activeNodeEdges.outgoing.length > 0 || activeNodeEdges.incoming.length > 0) && (
+                  <div className="flex flex-col gap-2">
+                    <span className="micro text-ink-dim">CONNECTED WIKILINKS</span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[...activeNodeEdges.outgoing, ...activeNodeEdges.incoming].slice(0, 12).map((target) => (
+                        <button
+                          key={target.id}
+                          type="button"
+                          onClick={() => void selectNode(target.id)}
+                          className="inline-flex items-center gap-1 rounded-full border border-white/15 bg-white/[0.04] px-2.5 py-1 font-mono text-[11px] text-ink transition hover:border-accent/55 hover:text-accent"
+                        >
+                          {target.title}
+                          <ArrowUpRight size={11} />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {noteLoading ? (
+                  <p className="font-mono text-xs text-ink-dim">Loading note content from OS3 Gateway…</p>
+                ) : note ? (
+                  <pre className="whitespace-pre-wrap rounded-xl border border-white/10 bg-black/40 p-3.5 font-mono text-xs leading-relaxed text-ink">
+                    {note.rawContent}
+                  </pre>
+                ) : (
+                  <p className="font-mono text-xs text-ink-dim">
+                    Live Markdown content unavailable in current offline snapshot.
+                  </p>
+                )}
+              </>
+            )}
+          </div>
         </aside>
       </div>
     </div>

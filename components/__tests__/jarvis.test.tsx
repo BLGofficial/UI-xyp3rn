@@ -193,4 +193,145 @@ describe('JarvisDock and JarvisView', () => {
     ).toBeInTheDocument();
     expect(fetchCalls.some((c) => c.url.includes('/api/audio/save-prompts'))).toBe(true);
   });
+
+  it('supports Vault/OS read acceptance toggle, source/function citation inspection, and change proposal Accept/Decline', async () => {
+    window.localStorage.clear();
+    const decideBodies: Array<{ proposalId: string; decision: string }> = [];
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes('/api/health')) {
+          return new Response(
+            JSON.stringify({ ok: true, indexStats: { totalFiles: 20355, bySector: {} }, agentsCount: 52 }),
+            { status: 200 },
+          );
+        }
+        if (url.includes('/api/audio/prompts')) {
+          return new Response(
+            JSON.stringify({ ok: true, folder: '09_X3LIUS_MUSIC/AUDIO_EXTRACTED_PROMPTS', prompts: [] }),
+            { status: 200 },
+          );
+        }
+        if (url.includes('/api/jarvis/inspect')) {
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              scope: 'os',
+              path: 'core/gateway/audio-reverse-engineer.ts',
+              title: 'audio-reverse-engineer.ts',
+              lineCount: 779,
+              symbols: [
+                {
+                  kind: 'function',
+                  name: 'reverseEngineerAudioTelemetry',
+                  line: 150,
+                  signature: 'export async function reverseEngineerAudioTelemetry(',
+                },
+              ],
+              content: 'export async function reverseEngineerAudioTelemetry() { /* verified */ }',
+              truncated: false,
+              sha256: 'sha256abc',
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes('/api/jarvis/proposal/decide')) {
+          const parsed = JSON.parse(String(init?.body ?? '{}')) as { proposalId: string; decision: string };
+          decideBodies.push(parsed);
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              applied: parsed.decision === 'approved',
+              decision: parsed.decision,
+              vaultPath: '10_INBOX/2026-11-16-note.md',
+              sha256: 'cafebabe1234',
+              message:
+                parsed.decision === 'approved'
+                  ? 'Change accepted and written to "10_INBOX/2026-11-16-note.md".'
+                  : 'Declined proposed change.',
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.endsWith('/api/jarvis')) {
+          const body = JSON.parse(String(init?.body ?? '{}')) as { prompt: string; readAccepted?: boolean };
+          if (body.readAccepted === false) {
+            return new Response(
+              JSON.stringify({
+                ok: true,
+                requiresReadAcceptance: true,
+                reply: 'Jarvis requires acceptance before reading Vault/OS.',
+              }),
+              { status: 200 },
+            );
+          }
+          if (body.prompt.toLowerCase().startsWith('create')) {
+            return new Response(
+              JSON.stringify({
+                ok: true,
+                reply: 'Proposed WRITE to "10_INBOX/2026-11-16-note.md". Should I apply this change or make no changes?',
+                proposal: {
+                  id: 'prop-99',
+                  action: 'write',
+                  targetScope: 'vault',
+                  targetPath: '10_INBOX/2026-11-16-note.md',
+                  content: '# Test Note\n',
+                  preview: '# Test Note\n',
+                  reason: 'Create draft note',
+                  isCanonical: false,
+                  status: 'pending',
+                },
+              }),
+              { status: 200 },
+            );
+          }
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              reply: 'Whole OS matched core/gateway/audio-reverse-engineer.ts (reverseEngineerAudioTelemetry).',
+              citations: [
+                {
+                  scope: 'os',
+                  path: 'core/gateway/audio-reverse-engineer.ts',
+                  title: 'audio-reverse-engineer.ts',
+                  symbols: ['reverseEngineerAudioTelemetry@L150'],
+                  snippet: 'L150: export async function reverseEngineerAudioTelemetry',
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response(JSON.stringify({ ok: false }), { status: 404 });
+      }),
+    );
+
+    render(<JarvisView activeSector="01_CORE" selectedJobId={null} />);
+    const dialog = screen.getByRole('dialog', { name: ui.jarvis.title });
+
+    // 1. Lock read access -> verify prompt asks for acceptance, then click ACCEPT READ ACCESS
+    await userEvent.click(within(dialog).getByRole('button', { name: /VAULT\/OS READ: ACCEPTED/i }));
+    const textbox = within(dialog).getByRole('textbox', { name: ui.jarvis.inputLabel });
+    await userEvent.type(textbox, 'Explain reverseEngineerAudioTelemetry{Enter}');
+
+    const acceptReadBtn = await within(dialog).findByRole('button', { name: /ACCEPT READ ACCESS/i });
+    await userEvent.click(acceptReadBtn);
+
+    // 2. Citations render & clicking inspects file symbols/functions
+    const citeBtn = await within(dialog).findByRole('button', { name: /core\/gateway\/audio-reverse-engineer\.ts/i });
+    await userEvent.click(citeBtn);
+    const inspector = await within(dialog).findByRole('region', { name: /OS and Vault Source Inspector/i });
+    expect(within(inspector).getByText(/function reverseEngineerAudioTelemetry@L150/i)).toBeInTheDocument();
+    await userEvent.click(within(inspector).getByRole('button', { name: /Close source inspector/i }));
+
+    // 3. Natural change request queues pending proposal -> click ACCEPT & APPLY
+    await userEvent.type(textbox, 'Create 10_INBOX/2026-11-16-note.md # Test Note{Enter}');
+    const applyBtn = await within(dialog).findByRole('button', { name: /ACCEPT & APPLY/i });
+    await userEvent.click(applyBtn);
+
+    expect(await within(dialog).findByText(/APPLIED ✓/i)).toBeInTheDocument();
+    expect(decideBodies[0]).toMatchObject({ proposalId: 'prop-99', decision: 'approved' });
+  });
 });

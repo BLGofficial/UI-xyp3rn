@@ -1,30 +1,51 @@
 'use client';
 
-import { RefreshCw, ShieldAlert, ShieldCheck, X } from 'lucide-react';
+import {
+  Activity,
+  AlertTriangle,
+  Bot,
+  CheckCircle2,
+  Database,
+  FileText,
+  FlaskConical,
+  GitBranch,
+  Layers,
+  Music,
+  Play,
+  RefreshCw,
+  Search,
+  ShieldAlert,
+  ShieldCheck,
+  Sparkles,
+  X,
+  XCircle,
+} from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { decideGatewayApproval, fetchVaultNote } from '@/lib/gateway';
+import { buildSeedDashboardBundle } from '@/lib/dashboard-seed';
+import {
+  decideGatewayApproval,
+  decideJarvisProposal,
+  dispatchJarvis,
+  fetchGatewayHealth,
+  fetchVaultNote,
+} from '@/lib/gateway';
 import {
   fetchAgentRegistry,
   fetchApprovalsByStatus,
   fetchRecordsOverview,
   fetchResearchOverview,
-  fetchRuntimeEvents,
-  fetchRuntimeRuns,
   fetchSystemOverview,
   fetchWorkflowRegistry,
 } from '@/lib/os3-adapter';
-import { parseMarkdown } from '@/lib/markdown';
 import { SECTOR_COLORS } from '@/lib/tokens';
 import type {
   DepartmentId,
   GatewayApprovalItem,
-  Os3AgentRunRecord,
+  GatewayHealthSnapshot,
   Os3AgentSummary,
   Os3DomainEntrySummary,
-  Os3JobRecord,
   Os3RecordsOverview,
   Os3ResearchOverview,
-  Os3RuntimeEventRecord,
   Os3SystemOverview,
   Os3WorkflowSummary,
   VaultNotePayload,
@@ -32,8 +53,8 @@ import type {
 
 type DashboardTab = 'overview' | 'agents' | 'workflows' | 'approvals' | 'research' | 'records';
 
-const TABS: ReadonlyArray<{ id: DashboardTab; label: string }> = [
-  { id: 'overview', label: 'OVERVIEW' },
+const TABS: Array<{ id: DashboardTab; label: string }> = [
+  { id: 'overview', label: 'SYSTEM OVERVIEW' },
   { id: 'agents', label: 'AGENTS' },
   { id: 'workflows', label: 'WORKFLOWS & RUNS' },
   { id: 'approvals', label: 'APPROVALS' },
@@ -41,624 +62,861 @@ const TABS: ReadonlyArray<{ id: DashboardTab; label: string }> = [
   { id: 'records', label: 'RECORDS' },
 ];
 
-function StatusPill({ status }: { status: string | null | undefined }) {
-  const s = (status ?? 'idle').toLowerCase();
-  const colorClass =
-    s === 'success' || s === 'approved' || s === 'live'
-      ? 'border-[#3ECFB2]/50 text-[#3ECFB2]'
-      : s === 'running' || s === 'queued' || s === 'pending' || s === 'in-development'
-        ? 'border-accent/60 text-accent'
-        : s === 'error' || s === 'rejected'
-          ? 'border-[#E5484D]/60 text-[#E5484D]'
-          : 'border-hairline text-ink-dim';
-  return <span className={`chip inline-block uppercase ${colorClass}`}>{s}</span>;
+const CARD = 'glass-card rounded-2xl p-4 sm:p-5';
+
+function uniqueEntries(items: Os3DomainEntrySummary[]): Os3DomainEntrySummary[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.vaultPath)) return false;
+    seen.add(item.vaultPath);
+    return true;
+  });
 }
 
-function DomainEntityList({
-  title,
-  items,
-  onInspect,
-}: {
-  title: string;
-  items: readonly Os3DomainEntrySummary[];
-  onInspect: (vaultPath: string) => void;
-}) {
+function statusTone(status: string | null | undefined): string {
+  const s = (status ?? '').toLowerCase();
+  if (s === 'success' || s === 'approved' || s === 'live' || s === 'canonical' || s === 'released') {
+    return 'border-emerald-400/35 bg-emerald-500/12 text-emerald-200';
+  }
+  if (s === 'running' || s === 'pending' || s === 'queued' || s === 'in-development') {
+    return 'border-amber-400/40 bg-amber-500/12 text-amber-200';
+  }
+  if (s === 'error' || s === 'rejected' || s === 'failed') {
+    return 'border-rose-400/40 bg-rose-500/12 text-rose-200';
+  }
+  return 'border-white/15 bg-white/5 text-ink-dim';
+}
+
+function SectorDistributionBar({ sector, count, maxCount }: { sector: string; count: number; maxCount: number }) {
+  const color = SECTOR_COLORS[sector as DepartmentId] ?? '#9B8CFF';
+  const pct = maxCount > 0 ? Math.max(6, Math.round((count / maxCount) * 100)) : 0;
   return (
-    <section className="frost rounded-[12px] p-4">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <h3 className="micro text-ink-dim">{title}</h3>
-        <span className="font-mono text-xs text-ink-dim">{items.length}</span>
+    <div className="group flex flex-col gap-1.5 rounded-xl border border-white/10 bg-white/[0.025] p-3 transition hover:border-white/20">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <span
+            className="h-2.5 w-2.5 shrink-0 rounded-full"
+            style={{ backgroundColor: color, boxShadow: `0 0 10px ${color}` }}
+          />
+          <span className="truncate font-mono text-xs text-ink">{sector}</span>
+        </div>
+        <span className="shrink-0 font-mono text-sm font-semibold tabular-nums text-ink">{count}</span>
       </div>
-      {items.length === 0 ? (
-        <p className="font-mono text-xs text-ink-dim">No indexed records yet.</p>
-      ) : (
-        <ul className="divide-y divide-hairline">
-          {items.slice(0, 12).map((item) => (
-            <li key={item.vaultPath} className="py-2">
-              <button
-                type="button"
-                onClick={() => onInspect(item.vaultPath)}
-                className="flex w-full items-start justify-between gap-3 text-left hover:text-accent"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-ink">{item.title}</p>
-                  <p className="truncate font-mono text-[11px] text-ink-dim">{item.vaultPath}</p>
-                </div>
-                <StatusPill status={item.status ?? item.docType} />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+        <div
+          className="h-full rounded-full transition-all duration-500"
+          style={{ width: `${pct}%`, background: `linear-gradient(90deg, ${color}, ${color}cc)` }}
+        />
+      </div>
+    </div>
   );
 }
 
-/** Operational Dashboard connecting System Overview, Agents, Workflows, Runs, Approvals, Research, and Records. */
 export function DashboardsView() {
   const [tab, setTab] = useState<DashboardTab>('overview');
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
+  const [gatewayError, setGatewayError] = useState<string | null>(null);
+  const [isSeedMode, setIsSeedMode] = useState(false);
 
   const [overview, setOverview] = useState<Os3SystemOverview | null>(null);
+  const [health, setHealth] = useState<GatewayHealthSnapshot | null>(null);
+  const [approvals, setApprovals] = useState<GatewayApprovalItem[]>([]);
   const [agents, setAgents] = useState<Os3AgentSummary[]>([]);
   const [workflows, setWorkflows] = useState<Os3WorkflowSummary[]>([]);
-  const [jobs, setJobs] = useState<Os3JobRecord[]>([]);
-  const [agentRuns, setAgentRuns] = useState<Os3AgentRunRecord[]>([]);
-  const [events, setEvents] = useState<Os3RuntimeEventRecord[]>([]);
-  const [approvals, setApprovals] = useState<GatewayApprovalItem[]>([]);
   const [research, setResearch] = useState<Os3ResearchOverview | null>(null);
   const [records, setRecords] = useState<Os3RecordsOverview | null>(null);
 
-  const [agentFilter, setAgentFilter] = useState('');
-  const [approvalStatusFilter, setApprovalStatusFilter] = useState<'pending' | 'approved' | 'rejected'>('pending');
-  const [approvalReason, setApprovalReason] = useState('Operator verified via OS3 Console');
-  const [approvalBusyId, setApprovalBusyId] = useState<string | null>(null);
-  const [approvalFeedback, setApprovalFeedback] = useState<string | null>(null);
+  const [filterText, setFilterText] = useState('');
+  const [actionBusyId, setActionBusyId] = useState<string | null>(null);
+  const [commandStatus, setCommandStatus] = useState<{ ok: boolean; title: string; detail: string } | null>(null);
 
   const [inspectedPath, setInspectedPath] = useState<string | null>(null);
   const [inspectedNote, setInspectedNote] = useState<VaultNotePayload | null>(null);
-  const [inspectLoading, setInspectLoading] = useState(false);
+  const [inspectedLoading, setInspectedLoading] = useState(false);
 
-  const loadDashboardData = useCallback(async () => {
+  const loadAll = useCallback(async () => {
     setLoading(true);
-    setError(null);
+    setGatewayError(null);
 
-    const [ovRes, agRes, wfRes, runsRes, evRes, apRes, resRes, recRes] = await Promise.all([
-      fetchSystemOverview(),
-      fetchAgentRegistry(),
-      fetchWorkflowRegistry(),
-      fetchRuntimeRuns(40),
-      fetchRuntimeEvents(40),
-      fetchApprovalsByStatus(approvalStatusFilter),
-      fetchResearchOverview(),
-      fetchRecordsOverview(),
-    ]);
+    try {
+      const [ovRes, hlRes, apRes, agRes, wfRes, rsRes, rcRes] = await Promise.all([
+        fetchSystemOverview(),
+        fetchGatewayHealth(),
+        fetchApprovalsByStatus(),
+        fetchAgentRegistry(),
+        fetchWorkflowRegistry(),
+        fetchResearchOverview(),
+        fetchRecordsOverview(),
+      ]);
 
-    if (!ovRes.ok) {
-      setError(ovRes.error ?? 'OS3 Gateway (127.0.0.1:8077) is offline or unreachable.');
+      const seed = buildSeedDashboardBundle();
+
+      if (!ovRes.ok || !ovRes.data) {
+        setGatewayError(ovRes.error ?? 'OS3 Gateway unreachable.');
+        setIsSeedMode(true);
+        setOverview(seed.overview);
+        setAgents(agRes.ok && agRes.data ? agRes.data.agents : seed.agents);
+        setWorkflows(wfRes.ok && wfRes.data ? wfRes.data.workflows : seed.workflows);
+        setResearch(rsRes.ok && rsRes.data ? rsRes.data : seed.research);
+        setRecords(rcRes.ok && rcRes.data ? rcRes.data : seed.records);
+        setApprovals(apRes.ok && apRes.data ? apRes.data.approvals : []);
+      } else {
+        setIsSeedMode(false);
+        setOverview(ovRes.data);
+        setHealth(hlRes.mode === 'live-gateway' ? hlRes : null);
+        setApprovals(apRes.ok && apRes.data ? apRes.data.approvals : ovRes.data.pendingApprovalsList ?? []);
+        setAgents(agRes.ok && agRes.data ? agRes.data.agents : seed.agents);
+        setWorkflows(wfRes.ok && wfRes.data ? wfRes.data.workflows : seed.workflows);
+        setResearch(rsRes.ok && rsRes.data ? rsRes.data : seed.research);
+        setRecords(rcRes.ok && rcRes.data ? rcRes.data : seed.records);
+      }
+    } catch (err) {
+      const seed = buildSeedDashboardBundle();
+      setGatewayError((err as Error).message || 'Failed to load OS3 Dashboard telemetry.');
+      setIsSeedMode(true);
+      setOverview(seed.overview);
+      setAgents(seed.agents);
+      setWorkflows(seed.workflows);
+      setResearch(seed.research);
+      setRecords(seed.records);
+      setApprovals([]);
+    } finally {
+      setLoading(false);
     }
-
-    if (ovRes.data) setOverview(ovRes.data);
-    if (agRes.data) setAgents(agRes.data.agents);
-    if (wfRes.data) setWorkflows(wfRes.data.workflows);
-    if (runsRes.data) {
-      setJobs(runsRes.data.jobs);
-      setAgentRuns(runsRes.data.agentRuns);
-    }
-    if (evRes.data) setEvents(evRes.data.events);
-    if (apRes.data) setApprovals(apRes.data.approvals);
-    if (resRes.data) setResearch(resRes.data);
-    if (recRes.data) setRecords(recRes.data);
-
-    setLoading(false);
-  }, [approvalStatusFilter]);
-
-  useEffect(() => {
-    void loadDashboardData();
-  }, [loadDashboardData]);
-
-  const openEntityInspector = useCallback(async (vaultPath: string) => {
-    setInspectedPath(vaultPath);
-    setInspectLoading(true);
-    const note = await fetchVaultNote(vaultPath);
-    setInspectedNote(note);
-    setInspectLoading(false);
   }, []);
 
-  const handleApprovalDecision = useCallback(
-    async (approvalId: string, decision: 'approved' | 'rejected') => {
-      setApprovalBusyId(approvalId);
-      setApprovalFeedback(null);
-      const decided = await decideGatewayApproval({
-        approvalId,
-        decision,
-        approver: 'operator-x3lius',
-        reason: approvalReason.trim() || `Operator ${decision}`,
-      });
-      setApprovalBusyId(null);
-      if (decided) {
-        setApprovalFeedback(`Approval ${approvalId} marked ${decided.status.toUpperCase()}.`);
-        void loadDashboardData();
+  useEffect(() => {
+    void loadAll();
+  }, [loadAll, refreshTick]);
+
+  const openEntityInspector = async (vaultPath: string) => {
+    setInspectedPath(vaultPath);
+    setInspectedNote(null);
+    setInspectedLoading(true);
+    try {
+      const note = await fetchVaultNote(vaultPath);
+      setInspectedNote(note);
+    } finally {
+      setInspectedLoading(false);
+    }
+  };
+
+  const handleDecideApproval = async (approval: GatewayApprovalItem, decision: 'approved' | 'rejected') => {
+    setActionBusyId(approval.id);
+    try {
+      if (approval.itemType === 'jarvis_change_proposal') {
+        const res = await decideJarvisProposal({
+          proposalId: approval.id,
+          decision,
+          approver: 'operator:UI-xyp3rn',
+          reason: 'Dashboard governance decision',
+        });
+        if (res?.ok) {
+          setApprovals((prev) =>
+            prev.map((a) =>
+              a.id === approval.id ? { ...a, status: decision, decidedAt: new Date().toISOString() } : a,
+            ),
+          );
+          setCommandStatus({
+            ok: true,
+            title: decision === 'approved' ? 'Proposal Applied & Approved' : 'Proposal Declined',
+            detail: res.message,
+          });
+          setRefreshTick((t) => t + 1);
+        } else {
+          setCommandStatus({
+            ok: false,
+            title: 'Proposal Decision Failed',
+            detail: 'Could not reach /api/jarvis/proposal/decide on OS3 Gateway.',
+          });
+        }
       } else {
-        setApprovalFeedback(`Failed to record decision for ${approvalId}. Check gateway connection.`);
+        const updated = await decideGatewayApproval({
+          approvalId: approval.id,
+          decision,
+          approver: 'operator:UI-xyp3rn',
+          reason: 'Dashboard governance decision',
+        });
+        if (updated) {
+          setApprovals((prev) => prev.map((a) => (a.id === approval.id ? updated : a)));
+          setCommandStatus({
+            ok: true,
+            title: decision === 'approved' ? 'Governance Approval Confirmed' : 'Governance Request Rejected',
+            detail: `${approval.itemId} (${approval.itemType}) updated cleanly.`,
+          });
+          setRefreshTick((t) => t + 1);
+        } else {
+          setCommandStatus({
+            ok: false,
+            title: 'Governance Decision Failed',
+            detail: 'Could not reach /api/approvals/decide on OS3 Gateway.',
+          });
+        }
       }
-    },
-    [approvalReason, loadDashboardData],
-  );
+    } finally {
+      setActionBusyId(null);
+    }
+  };
+
+  const handleDispatchCommand = async (id: string, label: string, prompt: string) => {
+    setActionBusyId(id);
+    try {
+      const res = await dispatchJarvis({
+        prompt,
+        engine: 'claude-code-cli',
+        activeSector: '01_CORE',
+        selectedJobId: null,
+      });
+      setCommandStatus({
+        ok: res.ok,
+        title: `${label} (${res.exchange.mode})`,
+        detail: res.exchange.reply,
+      });
+      if (res.exchange.mode === 'live-gateway') {
+        setRefreshTick((t) => t + 1);
+      }
+    } finally {
+      setActionBusyId(null);
+    }
+  };
+
+  const pendingApprovals = useMemo(() => approvals.filter((a) => a.status === 'pending'), [approvals]);
+  const needle = filterText.trim().toLowerCase();
 
   const filteredAgents = useMemo(() => {
-    const q = agentFilter.trim().toLowerCase();
-    if (!q) return agents;
+    if (!needle) return agents;
     return agents.filter(
       (a) =>
-        a.name.toLowerCase().includes(q) ||
-        a.class.toLowerCase().includes(q) ||
-        a.domain.toLowerCase().includes(q),
+        a.name.toLowerCase().includes(needle) ||
+        a.domain.toLowerCase().includes(needle) ||
+        a.role.toLowerCase().includes(needle),
     );
-  }, [agents, agentFilter]);
+  }, [agents, needle]);
+
+  const filteredWorkflows = useMemo(() => {
+    if (!needle) return workflows;
+    return workflows.filter(
+      (w) => w.name.toLowerCase().includes(needle) || w.description.toLowerCase().includes(needle),
+    );
+  }, [workflows, needle]);
+
+  const sectorPairs = useMemo(() => {
+    if (!overview) return [];
+    const pairs = Object.entries(overview.indexStats.bySector);
+    pairs.sort((a, b) => b[1] - a[1]);
+    return pairs;
+  }, [overview]);
+
+  const maxSectorCount = useMemo(
+    () => (sectorPairs.length > 0 ? Math.max(...sectorPairs.map(([, c]) => c), 1) : 1),
+    [sectorPairs],
+  );
+
+  const renderEntryCard = (entry: Os3DomainEntrySummary, accent: string, tagLabel?: string) => (
+    <button
+      key={entry.vaultPath}
+      type="button"
+      onClick={() => void openEntityInspector(entry.vaultPath)}
+      className="group flex flex-col gap-1.5 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-left transition hover:border-white/25 hover:bg-white/[0.06]"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <span className="truncate text-sm font-semibold text-ink group-hover:text-accent">{entry.title}</span>
+        <span className={`shrink-0 rounded-full border px-2 py-0.5 font-mono text-[10px] ${statusTone(entry.status)}`}>
+          {entry.status ?? tagLabel ?? entry.docType ?? 'indexed'}
+        </span>
+      </div>
+      <div className="flex items-center justify-between gap-2 font-mono text-[11px] text-ink-dim">
+        <span className="truncate">{entry.vaultPath}</span>
+        <span className="shrink-0 tabular-nums" style={{ color: accent }}>
+          {entry.wikilinksCount} links
+        </span>
+      </div>
+    </button>
+  );
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto px-4 pb-10 pt-20 md:px-8 md:pt-20">
-      <header className="mb-6 flex flex-wrap items-center justify-between gap-4 border-b border-hairline pb-4">
-        <div>
-          <p className="micro text-accent">XYP3RN OS 3.0 · OPERATIONAL DASHBOARD</p>
-          <h1 className="mt-1 font-serif text-2xl font-light uppercase tracking-label text-ink md:text-3xl">
-            System &amp; Execution Telemetry
-          </h1>
-        </div>
-        <button
-          type="button"
-          onClick={() => void loadDashboardData()}
-          className="frost micro flex items-center gap-2 rounded-full px-4 py-2 text-ink hover:border-accent"
-        >
-          <RefreshCw size={13} strokeWidth={1.5} className={loading ? 'animate-spin' : ''} aria-hidden="true" />
-          {loading ? 'SYNCING…' : 'REFRESH'}
-        </button>
-      </header>
-
-      {error && (
-        <div role="alert" className="frost mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border-[#E5484D]/50 px-4 py-3">
-          <div className="flex items-center gap-2 text-xs text-ink">
-            <ShieldAlert size={16} className="text-[#E5484D]" aria-hidden="true" />
-            <span>{error}</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => void loadDashboardData()}
-            className="micro rounded border border-hairline px-3 py-1.5 text-ink hover:border-ink/50"
-          >
-            RETRY CONNECTION
-          </button>
-        </div>
-      )}
-
-      <div
-        role="tablist"
-        aria-label="Operational dashboard sections"
-        className="mb-6 flex flex-wrap gap-1.5 border-b border-hairline pb-3"
-      >
-        {TABS.map((item) => {
-          const activeTab = tab === item.id;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              role="tab"
-              aria-selected={activeTab}
-              onClick={() => setTab(item.id)}
-              className={`micro rounded-full px-4 py-2 transition-colors ${
-                activeTab ? 'bg-ink font-bold text-bg' : 'frost text-ink-dim hover:text-ink'
-              }`}
-            >
-              {item.label}
-              {item.id === 'approvals' && overview && overview.runtime.pendingApprovals > 0
-                ? ` (${overview.runtime.pendingApprovals})`
-                : ''}
-            </button>
-          );
-        })}
-      </div>
-
-      {loading && !overview && (
-        <div className="frost rounded-[12px] p-8 text-center font-mono text-xs text-ink-dim">
-          Connecting to XYP3RN OS 3.0 Gateway (127.0.0.1:8077)…
-        </div>
-      )}
-
-      {tab === 'overview' && overview && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-6">
-            <div className="frost rounded-[12px] p-4">
-              <p className="micro text-ink-dim">VAULT FILES</p>
-              <p className="mt-2 font-serif text-3xl font-light text-ink">{overview.indexStats.totalFiles}</p>
+    <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden text-ink">
+      {/* Sticky Frosted Glass Command Header */}
+      <header className="frost z-10 shrink-0 border-x-0 border-t-0 px-4 pb-4 pt-16 sm:px-8 sm:pt-20">
+        <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3.5">
+            <div className="grid h-11 w-11 place-items-center rounded-2xl border border-accent/40 bg-accent/15 text-accent shadow-[0_0_24px_rgba(255,172,94,0.22)]">
+              <Activity size={20} />
             </div>
-            <div className="frost rounded-[12px] p-4">
-              <p className="micro text-ink-dim">AGENTS</p>
-              <p className="mt-2 font-serif text-3xl font-light text-ink">{overview.agents.total}</p>
-            </div>
-            <div className="frost rounded-[12px] p-4">
-              <p className="micro text-ink-dim">WORKFLOWS</p>
-              <p className="mt-2 font-serif text-3xl font-light text-ink">{overview.workflows.total}</p>
-            </div>
-            <div className="frost rounded-[12px] p-4">
-              <p className="micro text-ink-dim">PENDING APPROVALS</p>
-              <p className="mt-2 font-serif text-3xl font-light text-accent">{overview.runtime.pendingApprovals}</p>
-            </div>
-            <div className="frost rounded-[12px] p-4">
-              <p className="micro text-ink-dim">ACTIVE LOCKS</p>
-              <p className="mt-2 font-serif text-3xl font-light text-ink">{overview.runtime.activeLocks}</p>
-            </div>
-            <div className="frost rounded-[12px] p-4">
-              <p className="micro text-ink-dim">SQLITE INTEGRITY</p>
-              <p className="mt-2 flex items-center gap-1.5 font-mono text-sm text-[#3ECFB2]">
-                <ShieldCheck size={16} aria-hidden="true" />
-                {overview.integrityOk ? 'VERIFIED' : 'CHECK'}
+            <div>
+              <div className="flex items-center gap-2.5">
+                <h1 className="text-xl font-semibold tracking-tight text-ink sm:text-2xl">
+                  XYP3RN OS 3.0 OPERATOR DASHBOARDS
+                </h1>
+                <span
+                  className={`rounded-full border px-2.5 py-0.5 font-mono text-[10px] ${
+                    isSeedMode
+                      ? 'border-amber-400/35 bg-amber-500/12 text-amber-200'
+                      : 'border-emerald-400/35 bg-emerald-500/12 text-emerald-200'
+                  }`}
+                >
+                  {isSeedMode ? 'LOCAL SEED' : 'OS3 LIVE'}
+                </span>
+              </div>
+              <p className="mt-0.5 font-mono text-xs text-ink-dim">
+                {overview ? `${overview.service} · ${overview.vaultRoot}` : 'Synchronizing live OS 3.0 Vault & Runtime…'}
               </p>
             </div>
           </div>
 
-          <section className="frost rounded-[12px] p-5">
-            <h2 className="micro mb-4 text-ink-dim">VAULT SECTOR DISTRIBUTION</h2>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {Object.entries(overview.indexStats.bySector).map(([sector, count]) => {
-                const color = SECTOR_COLORS[sector as DepartmentId] ?? '#8B8F9C';
-                return (
-                  <div key={sector} className="outlined flex items-center justify-between px-4 py-3">
-                    <span className="font-mono text-xs" style={{ color }}>
-                      {sector}
-                    </span>
-                    <span className="font-mono text-sm font-semibold text-ink">{count}</span>
-                  </div>
-                );
-              })}
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="relative">
+              <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-dim" />
+              <input
+                type="search"
+                value={filterText}
+                onChange={(e) => setFilterText(e.target.value)}
+                placeholder="Filter agents, flows, notes…"
+                aria-label="Filter dashboard entries"
+                className="w-52 rounded-xl border border-white/15 bg-black/30 py-2 pl-9 pr-3 text-xs text-ink placeholder:text-ink-dim/80 focus:border-accent/60 focus:outline-none sm:w-64"
+              />
             </div>
-          </section>
 
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <section className="frost rounded-[12px] p-5">
-              <h2 className="micro mb-3 text-ink-dim">RECENT RUNTIME JOBS</h2>
-              {overview.recentJobs.length === 0 ? (
-                <p className="font-mono text-xs text-ink-dim">No workflow jobs recorded yet.</p>
-              ) : (
-                <ul className="divide-y divide-hairline">
-                  {overview.recentJobs.slice(0, 8).map((job) => (
-                    <li key={job.id} className="flex items-center justify-between gap-2 py-2.5 text-xs">
-                      <div className="min-w-0">
-                        <p className="truncate font-medium text-ink">{job.name}</p>
-                        <p className="font-mono text-[11px] text-ink-dim">
-                          {job.kind} · {job.id}
-                        </p>
-                      </div>
-                      <StatusPill status={job.status} />
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
+            {health && (
+              <span className="hidden rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 font-mono text-xs text-emerald-200 sm:inline-flex">
+                SQLite + Vault {health.totalIndexedFiles}
+              </span>
+            )}
 
-            <section className="frost rounded-[12px] p-5">
-              <h2 className="micro mb-3 text-ink-dim">RECENT AUDIT &amp; RUNTIME EVENTS</h2>
-              {overview.recentEvents.length === 0 ? (
-                <p className="font-mono text-xs text-ink-dim">No runtime events recorded yet.</p>
-              ) : (
-                <ul className="divide-y divide-hairline">
-                  {overview.recentEvents.slice(0, 8).map((ev) => (
-                    <li key={ev.id} className="flex items-center justify-between gap-2 py-2.5 text-xs">
-                      <div className="min-w-0">
-                        <p className="truncate font-mono text-ink">
-                          {ev.eventType} · <span className="text-ink-dim">{ev.actor}</span>
-                        </p>
-                        {ev.targetPath && (
-                          <button
-                            type="button"
-                            onClick={() => void openEntityInspector(ev.targetPath!)}
-                            className="truncate font-mono text-[11px] text-accent hover:underline"
-                          >
-                            {ev.targetPath}
-                          </button>
-                        )}
-                      </div>
-                      <span className="shrink-0 font-mono text-[10px] text-ink-dim">
-                        {ev.timestamp.slice(11, 19)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
+            <button
+              type="button"
+              onClick={() => setRefreshTick((t) => t + 1)}
+              className="flex items-center gap-2 rounded-xl border border-white/15 bg-white/[0.05] px-3.5 py-2 font-mono text-xs text-ink transition hover:border-accent/50 hover:bg-white/[0.1]"
+            >
+              <RefreshCw size={14} className={loading ? 'animate-spin text-accent' : 'text-accent'} />
+              REFRESH
+            </button>
           </div>
         </div>
-      )}
 
-      {tab === 'agents' && (
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <input
-              type="search"
-              value={agentFilter}
-              onChange={(e) => setAgentFilter(e.target.value)}
-              placeholder="Filter agents by name, class, or domain…"
-              aria-label="Filter agents"
-              className="frost w-full max-w-sm rounded-lg px-3 py-2 text-sm text-ink placeholder:text-ink-dim focus:outline-none"
-            />
-            <span className="font-mono text-xs text-ink-dim">
-              Showing {filteredAgents.length} / {agents.length} registered agents
-            </span>
-          </div>
-          {filteredAgents.length === 0 ? (
-            <div className="frost rounded-[12px] p-6 font-mono text-xs text-ink-dim">
-              No agents match filter &ldquo;{agentFilter}&rdquo;.
+        {/* Navigation Tabs */}
+        <nav
+          aria-label="Dashboard sections"
+          role="tablist"
+          className="mx-auto mt-4 flex max-w-[1440px] flex-wrap gap-2 border-t border-white/10 pt-3"
+        >
+          {TABS.map((t) => {
+            const active = tab === t.id;
+            const label =
+              t.id === 'approvals' && pendingApprovals.length > 0 ? `${t.label} (${pendingApprovals.length})` : t.label;
+            return (
+              <button
+                key={t.id}
+                role="tab"
+                type="button"
+                aria-selected={active}
+                onClick={() => setTab(t.id)}
+                className={`rounded-xl px-3.5 py-2 font-mono text-xs transition ${
+                  active
+                    ? 'border border-accent/60 bg-accent/18 font-semibold text-ink shadow-[0_0_20px_rgba(255,172,94,0.18)]'
+                    : 'border border-transparent text-ink-dim hover:border-white/15 hover:bg-white/[0.05] hover:text-ink'
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </nav>
+      </header>
+
+      {/* Main Scrollable Dashboard Content */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8">
+        <div className="mx-auto flex max-w-[1440px] flex-col gap-5 pb-8">
+          {gatewayError && (
+            <div
+              role="alert"
+              className="glass-card flex flex-wrap items-center justify-between gap-3 rounded-2xl border-rose-400/40 bg-rose-950/35 px-4 py-3.5 text-sm text-rose-100"
+            >
+              <div className="flex items-center gap-3">
+                <AlertTriangle size={18} className="shrink-0 text-rose-300" />
+                <div>
+                  <p className="font-mono text-xs font-semibold text-rose-200">
+                    GATEWAY CONNECTION WARNING · SHOWING LOCAL SEED TELEMETRY
+                  </p>
+                  <p className="text-xs text-rose-100/90">{gatewayError}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRefreshTick((t) => t + 1)}
+                className="rounded-xl border border-rose-300/40 bg-rose-500/20 px-3.5 py-2 font-mono text-xs font-semibold text-rose-100 transition hover:bg-rose-500/35"
+              >
+                RETRY CONNECTION
+              </button>
             </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {filteredAgents.map((agent) => (
-                <article key={agent.name} className="frost flex flex-col justify-between rounded-[12px] p-4">
-                  <div>
-                    <div className="flex items-start justify-between gap-2">
-                      <h3 className="font-mono text-sm font-semibold text-ink">{agent.name}</h3>
-                      <StatusPill status={agent.lastRun?.status ?? 'ready'} />
-                    </div>
-                    <p className="mt-1 font-mono text-[11px] text-accent">
-                      {agent.class} · {agent.domain} · {agent.model}
-                    </p>
-                    <p className="mt-2 line-clamp-2 text-xs text-ink-dim">{agent.role}</p>
+          )}
+
+          {commandStatus && (
+            <div
+              role="status"
+              className={`glass-card flex items-start justify-between gap-3 rounded-2xl px-4 py-3 text-xs ${
+                commandStatus.ok ? 'border-emerald-400/35' : 'border-amber-400/35'
+              }`}
+            >
+              <div className="flex items-start gap-2.5">
+                <Sparkles size={15} className="mt-0.5 shrink-0 text-accent" />
+                <div>
+                  <p className="font-mono font-semibold text-ink">{commandStatus.title}</p>
+                  <p className="mt-0.5 whitespace-pre-wrap text-ink-dim">{commandStatus.detail}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                aria-label="Dismiss status notice"
+                onClick={() => setCommandStatus(null)}
+                className="rounded-lg p-1 text-ink-dim hover:bg-white/10 hover:text-ink"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          )}
+
+          {loading && !overview && (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className={`${CARD} animate-pulse`}>
+                  <div className="h-3 w-28 rounded bg-white/10" />
+                  <div className="mt-3 h-8 w-20 rounded bg-white/15" />
+                  <div className="mt-2 h-3 w-36 rounded bg-white/10" />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* TAB 1: SYSTEM OVERVIEW */}
+          {tab === 'overview' && overview && (
+            <div className="flex flex-col gap-6">
+              <section aria-label="System KPIs" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className={CARD}>
+                  <div className="flex items-center justify-between text-ink-dim">
+                    <span className="micro">INDEXED VAULT FILES</span>
+                    <Database size={16} className="text-sky-400" />
                   </div>
-                  <div className="mt-3 flex flex-wrap gap-1 border-t border-hairline pt-2.5">
-                    {agent.tools.map((tool) => (
-                      <span key={tool} className="chip">
-                        {tool}
+                  <p className="mt-3 text-3xl font-semibold tabular-nums text-ink">{overview.indexStats.totalFiles}</p>
+                  <p className="mt-1.5 font-mono text-xs text-ink-dim">
+                    Integrity:{' '}
+                    <span className={overview.integrityOk ? 'font-semibold text-emerald-300' : 'text-rose-300'}>
+                      {overview.integrityOk ? 'VERIFIED' : 'CHECK REQUIRED'}
+                    </span>
+                  </p>
+                </div>
+
+                <div className={CARD}>
+                  <div className="flex items-center justify-between text-ink-dim">
+                    <span className="micro">AGENTS</span>
+                    <Bot size={16} className="text-violet-400" />
+                  </div>
+                  <p className="mt-3 text-3xl font-semibold tabular-nums text-ink">{overview.agents.total}</p>
+                  <p className="mt-1.5 font-mono text-xs text-ink-dim">
+                    Failures logged: <span className="text-ink">{overview.agents.failuresCount}</span>
+                  </p>
+                </div>
+
+                <div className={CARD}>
+                  <div className="flex items-center justify-between text-ink-dim">
+                    <span className="micro">WORKFLOWS</span>
+                    <GitBranch size={16} className="text-teal-300" />
+                  </div>
+                  <p className="mt-3 text-3xl font-semibold tabular-nums text-ink">{overview.workflows.total}</p>
+                  <p className="mt-1.5 font-mono text-xs text-ink-dim">
+                    Jobs executed: <span className="text-ink">{overview.runtime.recentJobsCount}</span>
+                  </p>
+                </div>
+
+                <div className={CARD}>
+                  <div className="flex items-center justify-between text-ink-dim">
+                    <span className="micro">GOVERNANCE APPROVALS</span>
+                    <ShieldCheck size={16} className="text-amber-300" />
+                  </div>
+                  <p className="mt-3 text-3xl font-semibold tabular-nums text-ink">{pendingApprovals.length}</p>
+                  <p className="mt-1.5 font-mono text-xs text-ink-dim">
+                    Active locks: <span className="text-ink">{overview.runtime.activeLocks}</span>
+                  </p>
+                </div>
+              </section>
+
+              <div className="grid gap-6 lg:grid-cols-2">
+                <section className={CARD}>
+                  <h2 className="micro mb-4 flex items-center gap-2 text-accent">
+                    <Layers size={14} /> VAULT SECTOR DISTRIBUTION
+                  </h2>
+                  <div className="flex flex-col gap-2.5">
+                    {sectorPairs.map(([sector, count]) => (
+                      <SectorDistributionBar key={sector} sector={sector} count={count} maxCount={maxSectorCount} />
+                    ))}
+                  </div>
+                </section>
+
+                <section className={CARD}>
+                  <h2 className="micro mb-4 flex items-center gap-2 text-accent">
+                    <Activity size={14} /> RECENT RUNTIME TELEMETRY
+                  </h2>
+                  <div className="flex max-h-[340px] flex-col gap-2.5 overflow-y-auto pr-1">
+                    {overview.recentJobs.map((job) => (
+                      <div
+                        key={job.id}
+                        className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/[0.025] px-3.5 py-2.5 text-xs"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate font-mono font-semibold text-ink">{job.name}</p>
+                          <p className="font-mono text-[11px] text-ink-dim">
+                            {job.kind} · {job.createdAt.slice(0, 19).replace('T', ' ')}
+                          </p>
+                        </div>
+                        <span className={`shrink-0 rounded-full border px-2.5 py-0.5 font-mono text-[10px] ${statusTone(job.status)}`}>
+                          {job.status}
+                        </span>
+                      </div>
+                    ))}
+                    {overview.recentEvents.slice(0, 8).map((ev) => (
+                      <div
+                        key={ev.id}
+                        className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-black/25 px-3.5 py-2 text-xs"
+                      >
+                        <span className="truncate font-mono text-ink">{ev.eventType}</span>
+                        <span className="shrink-0 font-mono text-[11px] text-ink-dim">{ev.actor}</span>
+                      </div>
+                    ))}
+                    {overview.recentJobs.length === 0 && overview.recentEvents.length === 0 && (
+                      <div className="rounded-xl border border-dashed border-white/15 p-4 font-mono text-xs text-ink-dim">
+                        No recent runtime jobs recorded yet. Dispatch an agent or workflow from the tabs above.
+                      </div>
+                    )}
+                  </div>
+                </section>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 2: AGENTS */}
+          {tab === 'agents' && (
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {filteredAgents.map((agent) => (
+                <article key={agent.name} className={`${CARD} flex flex-col gap-3`}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <h2 className="truncate text-base font-semibold text-ink">{agent.name}</h2>
+                      <p className="font-mono text-xs text-accent">
+                        {agent.class} · {agent.domain}
+                      </p>
+                    </div>
+                    {agent.lastRun && (
+                      <span
+                        className={`shrink-0 rounded-full border px-2.5 py-0.5 font-mono text-[10px] ${statusTone(agent.lastRun.status)}`}
+                      >
+                        {agent.lastRun.status}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-sm leading-relaxed text-ink-dim">{agent.role}</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {agent.tools.slice(0, 6).map((t) => (
+                      <span key={t} className="chip">
+                        {t}
                       </span>
                     ))}
                   </div>
+                  <div className="mt-auto flex items-center justify-between gap-2 border-t border-white/10 pt-3">
+                    <span className="truncate font-mono text-[11px] text-ink-dim">Model: {agent.model}</span>
+                    <button
+                      type="button"
+                      disabled={actionBusyId === `agent:${agent.name}`}
+                      onClick={() =>
+                        void handleDispatchCommand(
+                          `agent:${agent.name}`,
+                          `Agent · ${agent.name}`,
+                          `@${agent.name} status summary`,
+                        )
+                      }
+                      className="flex shrink-0 items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/15 px-2.5 py-1.5 font-mono text-[11px] font-semibold text-accent transition hover:bg-accent/25 disabled:opacity-50"
+                    >
+                      <Play size={11} /> RUN
+                    </button>
+                  </div>
                 </article>
               ))}
+              {filteredAgents.length === 0 && (
+                <p className="col-span-full font-mono text-sm text-ink-dim">No agents matched filter &ldquo;{filterText}&rdquo;.</p>
+              )}
             </div>
           )}
-        </div>
-      )}
 
-      {tab === 'workflows' && (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <section className="frost rounded-[12px] p-5">
-            <h2 className="micro mb-4 text-ink-dim">WORKFLOW REGISTRY ({workflows.length})</h2>
-            {workflows.length === 0 ? (
-              <p className="font-mono text-xs text-ink-dim">No workflow definitions discovered.</p>
-            ) : (
-              <ul className="space-y-3">
-                {workflows.map((wf) => (
-                  <li key={wf.name} className="outlined p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <h3 className="font-mono text-sm font-semibold text-ink">{wf.name}</h3>
-                      <StatusPill status={wf.lastJob?.status ?? 'ready'} />
+          {/* TAB 3: WORKFLOWS & RUNS */}
+          {tab === 'workflows' && (
+            <div className="flex flex-col gap-6">
+              <div className="grid gap-4 md:grid-cols-2">
+                {filteredWorkflows.map((wf) => (
+                  <article key={wf.name} className={`${CARD} flex flex-col gap-3`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <h2 className="text-base font-semibold text-ink">{wf.name}</h2>
+                        <p className="font-mono text-xs text-ink-dim">{wf.stepCount} DAG steps</p>
+                      </div>
+                      {wf.lastJob && (
+                        <span
+                          className={`rounded-full border px-2.5 py-0.5 font-mono text-[10px] ${statusTone(wf.lastJob.status)}`}
+                        >
+                          {wf.lastJob.status}
+                        </span>
+                      )}
                     </div>
-                    <p className="mt-1 text-xs text-ink-dim">{wf.description || wf.sourcePath}</p>
-                    <p className="mt-2 font-mono text-[11px] text-ink-dim">
-                      {wf.stepCount} steps · agents: {wf.steps.map((s) => s.agent).join(' → ')}
-                    </p>
-                  </li>
+                    <p className="text-sm leading-relaxed text-ink-dim">{wf.description}</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {wf.steps.map((s) => (
+                        <span key={s.id} className="chip">
+                          {s.id} → {s.agent}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="mt-auto flex items-center justify-between border-t border-white/10 pt-3">
+                      <span className="truncate font-mono text-[11px] text-ink-dim">
+                        Inputs: {wf.requiredInputs.join(', ') || 'none'}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={actionBusyId === `wf:${wf.name}`}
+                        onClick={() =>
+                          void handleDispatchCommand(`wf:${wf.name}`, `Workflow · ${wf.name}`, `flow ${wf.name}`)
+                        }
+                        className="flex shrink-0 items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/15 px-3 py-1.5 font-mono text-[11px] font-semibold text-accent transition hover:bg-accent/25 disabled:opacity-50"
+                      >
+                        <Play size={11} /> TRIGGER
+                      </button>
+                    </div>
+                  </article>
                 ))}
-              </ul>
-            )}
-          </section>
+              </div>
 
-          <section className="frost rounded-[12px] p-5">
-            <h2 className="micro mb-4 text-ink-dim">EXECUTION HISTORY (AGENT RUNS &amp; EVENTS)</h2>
-            {agentRuns.length === 0 && jobs.length === 0 && events.length === 0 ? (
-              <p className="font-mono text-xs text-ink-dim">No execution history recorded yet.</p>
-            ) : (
-              <ul className="divide-y divide-hairline">
-                {agentRuns.slice(0, 15).map((run) => (
-                  <li key={run.id} className="flex items-center justify-between gap-2 py-2.5 text-xs">
-                    <div className="min-w-0">
-                      <p className="truncate font-mono text-ink">{run.agentName}</p>
-                      <p className="font-mono text-[10px] text-ink-dim">
-                        {run.id} · {run.durationMs != null ? `${run.durationMs}ms` : 'active'}
+              {overview && overview.recentAgentRuns.length > 0 && (
+                <section className={CARD}>
+                  <h2 className="micro mb-3 text-accent">RECENT AGENT EXECUTION TRACE</h2>
+                  <div className="flex flex-col gap-2">
+                    {overview.recentAgentRuns.map((run) => (
+                      <div
+                        key={run.id}
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/[0.025] px-3.5 py-2.5 text-xs"
+                      >
+                        <span className="font-mono font-semibold text-ink">{run.agentName}</span>
+                        <span className="font-mono text-ink-dim">
+                          {run.durationMs != null ? `${run.durationMs}ms` : 'running'} · {run.startedAt}
+                        </span>
+                        <span className={`rounded-full border px-2.5 py-0.5 font-mono text-[10px] ${statusTone(run.status)}`}>
+                          {run.status}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+            </div>
+          )}
+
+          {/* TAB 4: APPROVALS & GOVERNANCE */}
+          {tab === 'approvals' && (
+            <div className="flex flex-col gap-4">
+              {approvals.length === 0 ? (
+                <div className={`${CARD} flex items-center gap-3 text-sm text-ink-dim`}>
+                  <ShieldCheck size={18} className="text-emerald-300" />
+                  No governance approval items recorded in SQLite runtime.
+                </div>
+              ) : (
+                approvals.map((item) => (
+                  <article
+                    key={item.id}
+                    className={`${CARD} flex flex-wrap items-center justify-between gap-4`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <ShieldAlert size={15} className="text-amber-300" />
+                        <span className="font-mono text-sm font-semibold text-ink">{item.itemId}</span>
+                        <span className={`rounded-full border px-2.5 py-0.5 font-mono text-[10px] ${statusTone(item.status)}`}>
+                          {item.status}
+                        </span>
+                      </div>
+                      <p className="mt-1 font-mono text-xs text-ink-dim">
+                        {item.itemType} · Proposer: {item.proposer} · {item.createdAt}
                       </p>
+                      {item.reason && <p className="mt-2 text-sm text-ink">{item.reason}</p>}
                     </div>
-                    <StatusPill status={run.status} />
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-        </div>
-      )}
 
-      {tab === 'approvals' && (
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex gap-2">
-              {(['pending', 'approved', 'rejected'] as const).map((statusKey) => (
-                <button
-                  key={statusKey}
-                  type="button"
-                  onClick={() => setApprovalStatusFilter(statusKey)}
-                  className={`micro rounded-full px-3 py-1.5 ${
-                    approvalStatusFilter === statusKey ? 'bg-accent font-bold text-bg' : 'frost text-ink-dim'
-                  }`}
-                >
-                  {statusKey}
-                </button>
-              ))}
+                    {item.status === 'pending' && (
+                      <div className="flex shrink-0 items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={actionBusyId === item.id}
+                          onClick={() => void handleDecideApproval(item, 'approved')}
+                          className="flex items-center gap-1.5 rounded-xl border border-emerald-400/45 bg-emerald-500/18 px-3.5 py-2 font-mono text-xs font-semibold text-emerald-100 transition hover:bg-emerald-500/30 disabled:opacity-50"
+                        >
+                          <CheckCircle2 size={14} /> APPROVE
+                        </button>
+                        <button
+                          type="button"
+                          disabled={actionBusyId === item.id}
+                          onClick={() => void handleDecideApproval(item, 'rejected')}
+                          className="flex items-center gap-1.5 rounded-xl border border-rose-400/45 bg-rose-500/18 px-3.5 py-2 font-mono text-xs font-semibold text-rose-100 transition hover:bg-rose-500/30 disabled:opacity-50"
+                        >
+                          <XCircle size={14} /> REJECT
+                        </button>
+                      </div>
+                    )}
+                  </article>
+                ))
+              )}
             </div>
-            <input
-              type="text"
-              value={approvalReason}
-              onChange={(e) => setApprovalReason(e.target.value)}
-              aria-label="Approval decision reason"
-              placeholder="Operator decision reason…"
-              className="frost w-full max-w-md rounded-lg px-3 py-1.5 font-mono text-xs text-ink focus:outline-none"
-            />
-          </div>
-
-          {approvalFeedback && (
-            <p role="status" className="frost rounded-lg px-4 py-2 font-mono text-xs text-accent">
-              {approvalFeedback}
-            </p>
           )}
 
-          {approvals.length === 0 ? (
-            <div className="frost rounded-[12px] p-6 font-mono text-xs text-ink-dim">
-              No {approvalStatusFilter} approvals in governance queue.
-            </div>
-          ) : (
-            <ul className="space-y-3">
-              {approvals.map((item) => (
-                <li key={item.id} className="frost flex flex-wrap items-center justify-between gap-4 rounded-[12px] p-4">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <StatusPill status={item.status} />
-                      <span className="font-mono text-xs text-ink-dim">{item.itemType}</span>
-                    </div>
-                    <p className="mt-1 font-mono text-sm font-semibold text-ink">{item.itemId}</p>
-                    <p className="mt-1 font-mono text-[11px] text-ink-dim">
-                      Proposer: {item.proposer} · Created: {item.createdAt}
-                      {item.approver ? ` · Decided by: ${item.approver}` : ''}
-                    </p>
+          {/* TAB 5: RESEARCH INTELLIGENCE */}
+          {tab === 'research' && research && (
+            <div className="flex flex-col gap-6">
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className={CARD}>
+                  <span className="micro text-ink-dim">PROJECTS</span>
+                  <p className="mt-2 text-2xl font-semibold tabular-nums">{research.counts.projects}</p>
+                </div>
+                <div className={CARD}>
+                  <span className="micro text-ink-dim">QUESTIONS</span>
+                  <p className="mt-2 text-2xl font-semibold tabular-nums">{research.counts.questions}</p>
+                </div>
+                <div className={CARD}>
+                  <span className="micro text-ink-dim">SOURCES</span>
+                  <p className="mt-2 text-2xl font-semibold tabular-nums">{research.counts.sources}</p>
+                </div>
+                <div className={CARD}>
+                  <span className="micro text-ink-dim">RESEARCH BRIEFS</span>
+                  <p className="mt-2 text-2xl font-semibold tabular-nums">{research.counts.briefs}</p>
+                </div>
+              </div>
+
+              <div className="grid gap-6 lg:grid-cols-2">
+                <section className={CARD}>
+                  <h2 className="micro mb-3 flex items-center gap-2 text-accent">
+                    <FlaskConical size={14} /> RESEARCH BRIEFS & FINDINGS
+                  </h2>
+                  <div className="flex flex-col gap-2">
+                    {uniqueEntries([...research.briefs, ...research.findings])
+                      .filter((e) => !needle || e.title.toLowerCase().includes(needle))
+                      .slice(0, 12)
+                      .map((entry) => renderEntryCard(entry, SECTOR_COLORS['03_RESEARCH_INTELLIGENCE']))}
                   </div>
-                  {item.status === 'pending' && (
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        disabled={approvalBusyId === item.id}
-                        onClick={() => void handleApprovalDecision(item.id, 'approved')}
-                        className="micro rounded-md border border-[#3ECFB2]/60 px-3 py-2 text-[#3ECFB2] hover:bg-[#3ECFB2]/10 disabled:opacity-50"
-                      >
-                        APPROVE
-                      </button>
-                      <button
-                        type="button"
-                        disabled={approvalBusyId === item.id}
-                        onClick={() => void handleApprovalDecision(item.id, 'rejected')}
-                        className="micro rounded-md border border-[#E5484D]/60 px-3 py-2 text-[#E5484D] hover:bg-[#E5484D]/10 disabled:opacity-50"
-                      >
-                        REJECT
-                      </button>
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
+                </section>
 
-      {tab === 'research' && (
-        <div className="space-y-6">
-          {!research ? (
-            <div className="frost rounded-[12px] p-6 font-mono text-xs text-ink-dim">
-              Research Intelligence data unavailable while gateway is offline.
-            </div>
-          ) : (
-            <>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
-                {Object.entries(research.counts).map(([k, val]) => (
-                  <div key={k} className="frost rounded-[12px] p-3">
-                    <p className="micro truncate text-ink-dim">{k}</p>
-                    <p className="mt-1 font-serif text-2xl font-light text-[#EC6A9C]">{val}</p>
+                <section className={CARD}>
+                  <h2 className="micro mb-3 flex items-center gap-2 text-accent">
+                    <FileText size={14} /> QUESTIONS, PROJECTS & SOURCES
+                  </h2>
+                  <div className="flex flex-col gap-2">
+                    {uniqueEntries([...research.projects, ...research.questions, ...research.sources])
+                      .filter((e) => !needle || e.title.toLowerCase().includes(needle))
+                      .slice(0, 12)
+                      .map((entry) => renderEntryCard(entry, SECTOR_COLORS['04_RESEARCH_MATERIAL']))}
                   </div>
-                ))}
+                </section>
               </div>
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                <DomainEntityList title="RESEARCH BRIEFS & SYNTHESES" items={research.briefs} onInspect={(p) => void openEntityInspector(p)} />
-                <DomainEntityList title="PROJECTS & QUESTIONS" items={[...research.projects, ...research.questions]} onInspect={(p) => void openEntityInspector(p)} />
-                <DomainEntityList title="EVIDENCE & FINDINGS" items={[...research.evidence, ...research.findings]} onInspect={(p) => void openEntityInspector(p)} />
-                <DomainEntityList title="CONTRADICTIONS & EXPERIMENTS" items={[...research.contradictions, ...research.experiments]} onInspect={(p) => void openEntityInspector(p)} />
-              </div>
-            </>
-          )}
-        </div>
-      )}
-
-      {tab === 'records' && (
-        <div className="space-y-6">
-          {!records ? (
-            <div className="frost rounded-[12px] p-6 font-mono text-xs text-ink-dim">
-              X3LIUS Records &amp; Music data unavailable while gateway is offline.
             </div>
-          ) : (
-            <>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
-                {Object.entries(records.counts).map(([k, val]) => (
-                  <div key={k} className="frost rounded-[12px] p-3">
-                    <p className="micro truncate text-ink-dim">{k}</p>
-                    <p className="mt-1 font-serif text-2xl font-light text-[#3ECFB2]">{val}</p>
+          )}
+
+          {/* TAB 6: RECORDS & X3LIUS */}
+          {tab === 'records' && records && (
+            <div className="flex flex-col gap-6">
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                <div className={CARD}>
+                  <span className="micro text-ink-dim">SONGS</span>
+                  <p className="mt-2 text-2xl font-semibold tabular-nums">{records.counts.songs}</p>
+                </div>
+                <div className={CARD}>
+                  <span className="micro text-ink-dim">EXTRACTED PROMPTS</span>
+                  <p className="mt-2 text-2xl font-semibold tabular-nums text-accent">{records.counts.sunoPrompts}</p>
+                </div>
+                <div className={CARD}>
+                  <span className="micro text-ink-dim">LYRICS</span>
+                  <p className="mt-2 text-2xl font-semibold tabular-nums">{records.counts.lyrics}</p>
+                </div>
+                <div className={CARD}>
+                  <span className="micro text-ink-dim">VOCAL DNA</span>
+                  <p className="mt-2 text-2xl font-semibold tabular-nums">{records.counts.vocalDna}</p>
+                </div>
+                <div className={CARD}>
+                  <span className="micro text-ink-dim">RELEASES</span>
+                  <p className="mt-2 text-2xl font-semibold tabular-nums">{records.counts.releases}</p>
+                </div>
+              </div>
+
+              <div className="grid gap-6 lg:grid-cols-2">
+                <section className={CARD}>
+                  <h2 className="micro mb-3 flex items-center gap-2 text-accent">
+                    <Music size={14} /> X3LIUS SONGS & RELEASES
+                  </h2>
+                  <div className="flex flex-col gap-2">
+                    {uniqueEntries([...records.songs, ...records.releases, ...records.catalogAssignments])
+                      .filter((e) => !needle || e.title.toLowerCase().includes(needle))
+                      .slice(0, 14)
+                      .map((entry) => renderEntryCard(entry, SECTOR_COLORS['05_XYP3RN_RECORDS']))}
                   </div>
-                ))}
+                </section>
+
+                <section className={CARD}>
+                  <h2 className="micro mb-3 flex items-center gap-2 text-accent">
+                    <Sparkles size={14} /> AUDIO EXTRACTED PROMPTS, LYRICS & VOCAL DNA
+                  </h2>
+                  <div className="flex flex-col gap-2">
+                    {uniqueEntries([...records.sunoPrompts, ...records.lyrics, ...records.vocalDna, ...records.audioTakes])
+                      .filter((e) => !needle || e.title.toLowerCase().includes(needle))
+                      .slice(0, 14)
+                      .map((entry) => renderEntryCard(entry, '#3ED6B9'))}
+                  </div>
+                </section>
               </div>
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                <DomainEntityList title="SONGS & LYRIC VERSIONS" items={[...records.songs, ...records.lyrics]} onInspect={(p) => void openEntityInspector(p)} />
-                <DomainEntityList title="SUNO PROMPTS & AUDIO TAKES" items={[...records.sunoPrompts, ...records.audioTakes]} onInspect={(p) => void openEntityInspector(p)} />
-                <DomainEntityList title="RELEASES & CATALOG ASSIGNMENTS" items={[...records.releases, ...records.catalogAssignments]} onInspect={(p) => void openEntityInspector(p)} />
-                <DomainEntityList title="RIGHTS SPLITS & SESSION LOGS" items={[...records.rightsSplits, ...records.sessionsDaily]} onInspect={(p) => void openEntityInspector(p)} />
-              </div>
-            </>
+            </div>
           )}
         </div>
-      )}
+      </div>
 
+      {/* Entity Inspector Modal */}
       {inspectedPath && (
         <div
           role="dialog"
           aria-modal="true"
           aria-label="Entity Inspector"
-          className="frost fixed inset-y-4 right-4 z-50 flex w-[min(640px,calc(100vw-2rem))] flex-col rounded-[14px]"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-md"
         >
-          <header className="flex items-center justify-between gap-3 border-b border-hairline px-5 py-4">
-            <div className="min-w-0">
-              <p className="micro text-accent">ENTITY INSPECTOR</p>
-              <p className="truncate font-mono text-xs text-ink-dim">{inspectedPath}</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                setInspectedPath(null);
-                setInspectedNote(null);
-              }}
-              aria-label="Close entity inspector"
-              className="grid h-9 w-9 place-items-center rounded-full border border-hairline text-ink-dim hover:text-ink"
-            >
-              <X size={16} aria-hidden="true" />
-            </button>
-          </header>
-          <div className="flex-1 overflow-y-auto px-5 py-4">
-            {inspectLoading ? (
-              <p className="font-mono text-xs text-ink-dim">Reading canonical Vault note…</p>
-            ) : !inspectedNote ? (
-              <p className="font-mono text-xs text-[#E5484D]">Could not load note from Vault Engine.</p>
-            ) : (
-              <div className="space-y-3">
-                <div className="flex flex-wrap gap-2 font-mono text-[11px] text-ink-dim">
-                  <span className="chip">{inspectedNote.sector}</span>
-                  <span className="chip">{inspectedNote.isCanonical ? 'CANONICAL' : 'WORKSPACE'}</span>
-                  <span className="chip">sha256:{inspectedNote.sha256.slice(0, 12)}</span>
-                </div>
-                <div className="space-y-2 text-sm text-ink">
-                  {parseMarkdown(inspectedNote.rawContent).map((block, i) =>
-                    block.type === 'code' || block.type === 'frontmatter' ? (
-                      <pre key={i} className="outlined overflow-x-auto bg-bg/40 p-3 font-mono text-xs">
-                        {block.type === 'code' ? block.text : block.lines.join('\n')}
-                      </pre>
-                    ) : block.type === 'heading' ? (
-                      <h4 key={i} className="pt-2 font-semibold text-ink">
-                        {block.text}
-                      </h4>
-                    ) : block.type === 'list' ? (
-                      <ul key={i} className="list-disc space-y-1 pl-5 text-ink-dim">
-                        {block.items.map((it, idx) => (
-                          <li key={idx}>{it}</li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p key={i} className="leading-relaxed text-ink">
-                        {block.text}
-                      </p>
-                    ),
-                  )}
-                </div>
+          <div className="frost flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl">
+            <header className="flex items-center justify-between gap-3 border-b border-white/10 px-5 py-4">
+              <div className="min-w-0">
+                <h2 className="truncate font-mono text-sm font-semibold text-ink">{inspectedPath}</h2>
+                {inspectedNote && (
+                  <p className="mt-0.5 font-mono text-[11px] text-ink-dim">
+                    {inspectedNote.sector} · sha256:{inspectedNote.sha256.slice(0, 12)} · {inspectedNote.outgoingLinks.length} links
+                  </p>
+                )}
               </div>
-            )}
+              <button
+                type="button"
+                aria-label="Close entity inspector"
+                onClick={() => setInspectedPath(null)}
+                className="grid h-9 w-9 place-items-center rounded-full border border-white/15 text-ink-dim hover:bg-white/10 hover:text-ink"
+              >
+                <X size={16} />
+              </button>
+            </header>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {inspectedLoading ? (
+                <p className="font-mono text-xs text-ink-dim">Reading entity note from Vault…</p>
+              ) : inspectedNote ? (
+                <pre className="whitespace-pre-wrap rounded-xl border border-white/10 bg-black/35 p-4 font-mono text-xs leading-relaxed text-ink">
+                  {inspectedNote.rawContent}
+                </pre>
+              ) : (
+                <p className="font-mono text-xs text-ink-dim">
+                  Local seed preview: start OS3 Gateway (:8077) to read the full Vault Markdown note.
+                </p>
+              )}
+            </div>
           </div>
         </div>
       )}

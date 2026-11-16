@@ -218,4 +218,26 @@ describe('SectorTree', () => {
     expect(document.querySelector('.tree')).toHaveTextContent('02_Agents');
     expect(document.querySelector('.tree')).toHaveTextContent('8 jobs');
   });
+
+  it('renders 3D sphere shading and zoom-LOD labels on Overview nodes', () => {
+    render(
+      <svg>
+        <SectorTree
+          department={core}
+          layout={layoutSector(core)}
+          variant="overview"
+          open
+          scale={1}
+          statuses={{}}
+          selectedId={null}
+          interactive
+          onSelect={vi.fn()}
+        />
+      </svg>,
+    );
+    expect(document.querySelectorAll('.overview-zoom-label').length).toBe(core.jobs.length);
+    expect(document.querySelectorAll('circle[fill="url(#sphere-3d-solid)"]').length).toBeGreaterThanOrEqual(
+      core.jobs.length,
+    );
+  });
 });

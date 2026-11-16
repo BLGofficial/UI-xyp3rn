@@ -2,17 +2,23 @@
 
 import {
   ActivitySquare,
+  BookOpen,
+  CheckCircle2,
   ChevronDown,
+  Code2,
   Eye,
   EyeOff,
+  Lock,
   Mic,
   Minimize2,
   Send,
   ShieldCheck,
   Trash2,
+  Unlock,
   Volume2,
   VolumeX,
   X,
+  XCircle,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { departments, ui, x3liusTracks } from '@/data/map';
@@ -21,7 +27,16 @@ import {
   fetchExtractedAudioPrompts,
   reverseEngineerAudio,
 } from '@/lib/audio-reverse-engineer';
-import { appendSessionLog, clearSessionLogs, dispatchJarvis, fetchGatewayHealth, readSessionLogs } from '@/lib/gateway';
+import {
+  appendSessionLog,
+  clearSessionLogs,
+  decideJarvisProposal,
+  dispatchJarvis,
+  fetchGatewayHealth,
+  inspectJarvisSource,
+  readSessionLogs,
+  writeSessionLogs,
+} from '@/lib/gateway';
 import { fill } from '@/lib/labels';
 import { LAYOUT } from '@/lib/tokens';
 import type {
@@ -30,6 +45,7 @@ import type {
   EngineId,
   GatewayMode,
   JarvisExchange,
+  JarvisInspectionPayload,
   JarvisVoiceState,
   SavedAudioPromptFile,
   SavedAudioPromptSummary,
@@ -157,8 +173,12 @@ export function JarvisView({
   const [extractionMode, setExtractionMode] = useState<GatewayMode>('local-vault');
   const [savedPrompts, setSavedPrompts] = useState<SavedAudioPromptSummary[]>([]);
 
-  // Collapsible glassmorphic windows & hover-reveal pinning
+  // Collapsible glassmorphic windows, read acceptance & change governance
   const [pinGlass, setPinGlass] = useState(false);
+  const [readAccepted, setReadAccepted] = useState(true);
+  const [proposalBusyId, setProposalBusyId] = useState<string | null>(null);
+  const [inspectedSource, setInspectedSource] = useState<JarvisInspectionPayload | null>(null);
+  const [inspectLoading, setInspectLoading] = useState(false);
   const [openPanels, setOpenPanels] = useState({
     player: true,
     extractor: true,
@@ -205,7 +225,7 @@ export function JarvisView({
   }, [voiceState, playing]);
 
   const executePrompt = useCallback(
-    async (promptText: string) => {
+    async (promptText: string, overrideReadAccepted?: boolean) => {
       const trimmed = promptText.trim();
       if (!trimmed) return;
       setVoiceState('processing');
@@ -214,6 +234,8 @@ export function JarvisView({
         engine,
         activeSector,
         selectedJobId,
+        askBeforeChange: true,
+        readAccepted: overrideReadAccepted ?? readAccepted,
       });
 
       const updated = appendSessionLog(response.exchange);
@@ -239,8 +261,57 @@ export function JarvisView({
         onEnd: () => setVoiceState('idle'),
       });
     },
-    [engine, activeSector, selectedJobId, ttsEnabled, onFocusSector],
+    [engine, activeSector, selectedJobId, readAccepted, ttsEnabled, onFocusSector],
   );
+
+  const handleAcceptReadAndRetry = useCallback(
+    (promptText: string) => {
+      setReadAccepted(true);
+      void executePrompt(promptText, true);
+    },
+    [executePrompt],
+  );
+
+  const handleDecideProposal = useCallback(
+    async (entryId: string, proposalId: string, decision: 'approved' | 'rejected') => {
+      setProposalBusyId(proposalId);
+      const result = await decideJarvisProposal({
+        proposalId,
+        decision,
+        approver: 'operator',
+        reason: decision === 'approved' ? 'Accepted by operator in Jarvis Console' : 'Declined by operator',
+      });
+      setProposalBusyId(null);
+
+      setLogs((prev) => {
+        const next = prev.map((item) => {
+          if (item.id !== entryId || !item.proposal) return item;
+          return {
+            ...item,
+            proposal: {
+              ...item.proposal,
+              status: decision,
+              resolutionNote:
+                result?.message ??
+                (decision === 'approved' ? 'Accepted by operator.' : 'Declined — no changes made.'),
+            },
+          };
+        });
+        writeSessionLogs(next);
+        return next;
+      });
+    },
+    [],
+  );
+
+  const handleInspectCitation = useCallback(async (scope: 'vault' | 'os', relPath: string) => {
+    setInspectLoading(true);
+    const data = await inspectJarvisSource(scope, relPath);
+    setInspectLoading(false);
+    if (data) {
+      setInspectedSource(data);
+    }
+  }, []);
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
@@ -382,6 +453,21 @@ export function JarvisView({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setReadAccepted((v) => !v)}
+            aria-pressed={readAccepted}
+            title="Toggle Jarvis direct Vault & Whole-OS read access"
+            className={`chip flex items-center gap-1.5 transition-colors ${
+              readAccepted
+                ? 'border-[#3ECFB2]/60 bg-[#3ECFB2]/15 text-[#BFFFEF]'
+                : 'border-[#F59B5C]/60 bg-[#F59B5C]/15 text-accent'
+            }`}
+          >
+            {readAccepted ? <Unlock size={12} aria-hidden="true" /> : <Lock size={12} aria-hidden="true" />}
+            {readAccepted ? 'VAULT/OS READ: ACCEPTED' : 'READ LOCKED (ASK)'}
+          </button>
+
           <button
             type="button"
             onClick={() => setPinGlass((v) => !v)}
@@ -643,6 +729,89 @@ export function JarvisView({
                         <span className="micro text-ink-dim">{ui.jarvis.engines[entry.engine]}</span>
                       </div>
                       <p className="mt-1.5 text-sm leading-relaxed text-ink">{entry.reply}</p>
+
+                      {entry.requiresReadAcceptance && !readAccepted && (
+                        <div className="mt-2.5 flex flex-wrap items-center gap-2 rounded-md border border-[#F59B5C]/40 bg-[#F59B5C]/10 p-2">
+                          <span className="font-mono text-[11px] text-accent">
+                            Grant direct read/search across Vault &amp; OS?
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleAcceptReadAndRetry(entry.prompt)}
+                            className="micro rounded border border-[#3ECFB2]/60 bg-[#3ECFB2] px-2.5 py-1 text-[10px] font-bold text-bg"
+                          >
+                            ACCEPT READ ACCESS
+                          </button>
+                        </div>
+                      )}
+
+                      {entry.citations && entry.citations.length > 0 && (
+                        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                          <span className="micro text-[9px] text-ink-dim">SOURCES:</span>
+                          {entry.citations.map((cite) => (
+                            <button
+                              key={`${cite.scope}:${cite.path}`}
+                              type="button"
+                              onClick={() => void handleInspectCitation(cite.scope, cite.path)}
+                              title={cite.snippet}
+                              className={`chip flex items-center gap-1 text-[10px] hover:border-accent/60 ${
+                                cite.scope === 'os'
+                                  ? 'border-[#38BDF8]/40 bg-[#38BDF8]/10 text-[#BAE6FD]'
+                                  : 'border-[#3ECFB2]/40 bg-[#3ECFB2]/10 text-[#BFFFEF]'
+                              }`}
+                            >
+                              {cite.scope === 'os' ? <Code2 size={10} /> : <BookOpen size={10} />}
+                              <span className="max-w-[190px] truncate">{cite.path}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {entry.proposal && (
+                        <div className="mt-2.5 flex flex-col gap-2 rounded-lg border border-accent/45 bg-black/55 p-2.5">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="micro text-[10px] text-accent">
+                              PROPOSED CHANGE · {entry.proposal.action.toUpperCase()}
+                            </span>
+                            <span className="font-mono text-[10px] text-ink-dim">{entry.proposal.targetPath}</span>
+                          </div>
+                          <pre className="max-h-24 overflow-y-auto rounded border border-hairline/60 bg-black/60 p-2 font-mono text-[10px] text-ink/90 whitespace-pre-wrap">
+                            {entry.proposal.preview}
+                          </pre>
+                          {entry.proposal.status === 'pending' ? (
+                            <div className="flex flex-wrap items-center justify-end gap-2">
+                              <button
+                                type="button"
+                                disabled={proposalBusyId === entry.proposal.id}
+                                onClick={() => void handleDecideProposal(entry.id, entry.proposal!.id, 'rejected')}
+                                className="micro flex items-center gap-1 rounded border border-hairline px-2.5 py-1 text-[10px] text-ink-dim hover:text-ink disabled:opacity-50"
+                              >
+                                <XCircle size={11} aria-hidden="true" />
+                                DECLINE · NO CHANGE
+                              </button>
+                              <button
+                                type="button"
+                                disabled={proposalBusyId === entry.proposal.id}
+                                onClick={() => void handleDecideProposal(entry.id, entry.proposal!.id, 'approved')}
+                                className="micro flex items-center gap-1 rounded border border-[#3ECFB2] bg-[#3ECFB2] px-2.5 py-1 text-[10px] font-bold text-bg disabled:opacity-50"
+                              >
+                                <CheckCircle2 size={11} aria-hidden="true" />
+                                ACCEPT &amp; APPLY
+                              </button>
+                            </div>
+                          ) : (
+                            <p
+                              className={`font-mono text-[10px] ${
+                                entry.proposal.status === 'approved' ? 'text-[#BFFFEF]' : 'text-ink-dim'
+                              }`}
+                            >
+                              {entry.proposal.status === 'approved' ? 'APPLIED ✓ ' : 'DECLINED · '}
+                              {entry.proposal.resolutionNote}
+                            </p>
+                          )}
+                        </div>
+                      )}
+
                       {jobIds.length > 0 && (
                         <div className="mt-2 flex flex-wrap items-center gap-1.5">
                           <span className="micro text-ink-dim">{ui.jarvis.contextLabel}:</span>
@@ -698,6 +867,56 @@ export function JarvisView({
           </GlassWindow>
         </div>
       </div>
+
+      {/* Floating Frosted Glass Source & Function Inspector Modal */}
+      {(inspectedSource || inspectLoading) && (
+        <div
+          role="region"
+          aria-label="OS and Vault Source Inspector"
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm"
+        >
+          <div className="jarvis-glass-bar flex max-h-[85vh] w-full max-w-3xl flex-col rounded-2xl p-4 shadow-2xl">
+            <div className="flex items-center justify-between gap-2 border-b border-hairline pb-2.5">
+              <div className="min-w-0">
+                <span className="micro text-accent">
+                  {inspectedSource?.scope === 'os' ? 'WHOLE OS CODE INSPECTOR' : 'VAULT DIRECT INSPECTOR'}
+                </span>
+                <h4 className="truncate font-mono text-xs text-ink">
+                  {inspectLoading ? 'Loading file...' : inspectedSource?.path}
+                </h4>
+              </div>
+              <button
+                type="button"
+                aria-label="Close source inspector"
+                onClick={() => setInspectedSource(null)}
+                className="grid h-8 w-8 place-items-center rounded-full border border-hairline text-ink-dim hover:text-ink"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            {inspectedSource && !inspectLoading && (
+              <div className="mt-3 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
+                {inspectedSource.symbols.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {inspectedSource.symbols.slice(0, 18).map((sym) => (
+                      <span
+                        key={`${sym.name}-${sym.line}`}
+                        className="chip border-[#38BDF8]/40 bg-[#38BDF8]/10 text-[10px] text-[#BAE6FD]"
+                      >
+                        {sym.kind} {sym.name}@L{sym.line}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <pre className="max-h-[55vh] overflow-y-auto rounded-lg border border-hairline bg-black/70 p-3 font-mono text-[11px] leading-relaxed text-ink whitespace-pre-wrap">
+                  {inspectedSource.content}
+                </pre>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

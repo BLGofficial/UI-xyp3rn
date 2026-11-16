@@ -172,18 +172,56 @@ export type ParsedCommand = {
   contextRefs: string[];
 };
 
+export type JarvisCitation = {
+  scope: 'vault' | 'os';
+  path: string;
+  title: string;
+  symbols?: string[];
+  snippet: string;
+  sha256?: string;
+};
+
+export type JarvisChangeProposal = {
+  id: string;
+  action: 'write' | 'append' | 'compose' | 'task' | 'research' | 'flow' | 'os-patch-note';
+  targetScope: 'vault' | 'os';
+  targetPath: string;
+  content: string;
+  preview: string;
+  reason: string;
+  isCanonical: boolean;
+  status: 'pending' | 'approved' | 'rejected';
+  resolutionNote?: string;
+};
+
+export type JarvisInspectionPayload = {
+  ok: boolean;
+  scope: 'vault' | 'os';
+  path: string;
+  title: string;
+  sector?: string;
+  lineCount: number;
+  symbols: Array<{ kind: string; name: string; line: number; signature: string }>;
+  content: string;
+  truncated: boolean;
+  sha256: string;
+};
+
 export type JarvisExchange = {
   id: string;
   timestamp: string;
   prompt: string;
   reply: string;
-  commandKind: CommandKind;
+  commandKind: CommandKind | string;
   engine: EngineId;
   mode: GatewayMode;
   /** Job ids resolved from @path or @agent tokens in the prompt. */
   contextJobs: string[];
   referencedJobId?: string;
   trackId?: string;
+  citations?: JarvisCitation[];
+  proposal?: JarvisChangeProposal;
+  requiresReadAcceptance?: boolean;
 };
 
 export type GatewayAction =
@@ -197,6 +235,8 @@ export type GatewayRequest = {
   engine?: EngineId;
   activeSector?: DepartmentId;
   selectedJobId?: string | null;
+  askBeforeChange?: boolean;
+  readAccepted?: boolean;
 };
 
 export type GatewayResponse = {
