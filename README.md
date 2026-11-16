@@ -31,6 +31,7 @@ Next.js 14 (App Router), React 18, TypeScript strict, Tailwind 3, Framer Motion,
 | 3 Sector focus | Enter or double-click a hub | 160 degree arc, 34px icon nodes, satellites, wheel/pinch zoom, drag pan |
 | 4 Job panel | Click a node | 14 sections, BUILDS ON navigation, status saved to localStorage |
 | 5 SKILL.MD sheet | From the panel | Rendered note, copy install command, copy, download |
+| Jarvis Dock & Console | `/map` dock, `X3` rail button, or `/jarvis` | Voice/CLI routing (`CLAUDE CLI` / `GEMINI API`), `@path` context injection, `127.0.0.1:8077` gateway + local vault fallback, 24-band X3LIUS player |
 | 6-7 | `/dashboards`, `/chart` | Empty states. STUB: the source never shows these screens |
 
 Keys: `←` `→` cycle sectors, `Enter` on a hub focuses it, `Space` collapses it, `Esc` closes one layer.
@@ -38,10 +39,10 @@ Keys: `←` `→` cycle sectors, `Enter` on a hub focuses it, `Space` collapses 
 ## Layout of the code
 
 ```
-app/            routes, fonts, dot grid, star field
-components/     ConstellationCanvas, SectorTree, BrainCore, JobPanel, SkillViewer, chrome
-data/map.ts     the only content source: UI copy, brain config, 137 jobs
-lib/            pure functions: layout, prng, storage, url, search, markdown, camera, vault paths
+app/            routes (/map, /jarvis, /dashboards, /chart), fonts, dot grid, star field
+components/     ConstellationCanvas, SectorTree, BrainCore, JobPanel, SkillViewer, JarvisVisualizer, JarvisDock, JarvisView, X3liusPlayer, chrome
+data/map.ts     the only content source: UI copy, brain config, X3LIUS tracks, 137 jobs
+lib/            pure functions: layout, prng, storage, url, search, markdown, camera, vault paths, jarvis, gateway, voice
 lib/tokens.ts   palette plus every layout and motion constant
 ```
 

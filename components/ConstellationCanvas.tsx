@@ -201,6 +201,7 @@ export function ConstellationCanvas({
 
   const geometryRef = useRef(geometry);
   const focusIndexRef = useRef(focusIndex);
+  const ringKeyRef = useRef('');
 
   const apply = useCallback(() => {
     const g = geometryRef.current;
@@ -209,47 +210,61 @@ export function ConstellationCanvas({
     const u = unroll.get();
     const offset = slide.get();
     const f = focusT.get();
+    const fi = focusIndexRef.current;
+
+    // Only write the 66 per-sector ring attributes when ring state or viewport geometry changes,
+    // keeping focus fly-in and focus pan/zoom frames light.
+    const nextRingKey = `${rotation.toFixed(3)}:${u.toFixed(3)}:${offset.toFixed(3)}:${g.width}x${g.height}:${g.treeScale}`;
+    if (ringKeyRef.current !== nextRingKey) {
+      ringKeyRef.current = nextRingKey;
+      for (let i = 0; i < count; i++) {
+        const degrees = 90 + i * step + rotation;
+        const cos = Math.cos(degrees * DEG);
+        const sin = Math.sin(degrees * DEG);
+        const x = lerp(cos * g.ring, (i - offset) * g.stripGap, u);
+        const y = lerp(sin * g.ring, g.stripY, u);
+        // Trees are laid out growing up; +90 turns "up" into "away from the ring centre".
+        const turn = fold(degrees + 90) * (1 - u);
+        sectorRefs.current[i]?.setAttribute(
+          'transform',
+          `translate(${x.toFixed(2)} ${y.toFixed(2)}) rotate(${turn.toFixed(2)}) scale(${g.treeScale.toFixed(4)})`,
+        );
+        glyphRefs.current[i]?.setAttribute('transform', `rotate(${(-turn).toFixed(2)})`);
+
+        // Labels sit beside the hub on the side facing away from the ring's vertical axis,
+        // so their text always runs outward and never across the brain.
+        const side = cos < -0.1 ? -1 : 1;
+        const flip = -sin * side < 0 ? -1 : 1;
+        const tx = -sin * flip;
+        const ty = cos * flip;
+        const label = labelRefs.current[i];
+        if (label) {
+          const lx = lerp(cos * g.ring + tx * 44 + cos * 8, x, u);
+          const ly = lerp(sin * g.ring + ty * 44 + sin * 8 - 3, y + 48, u);
+          label.setAttribute('transform', `translate(${lx.toFixed(2)} ${ly.toFixed(2)})`);
+          label.setAttribute('text-anchor', u > 0.5 ? 'middle' : side > 0 ? 'start' : 'end');
+          // Taglines are wider than the gap between strip hubs; they return when the ring re-forms.
+          label.style.setProperty('--tagline', String(clamp(1 - 2.5 * u, 0, 1)));
+        }
+
+        const spoke = spokeRefs.current[i];
+        if (spoke) {
+          spoke.setAttribute('x1', (cos * (g.ring - LAYOUT.hubRadius)).toFixed(2));
+          spoke.setAttribute('y1', (sin * (g.ring - LAYOUT.hubRadius)).toFixed(2));
+          spoke.setAttribute('x2', (cos * g.brain).toFixed(2));
+          spoke.setAttribute('y2', (sin * g.brain).toFixed(2));
+          spoke.style.opacity = String(0.16 * clamp(1 - 3 * u, 0, 1));
+        }
+      }
+    }
+
     let focusHub: Point = { x: 0, y: g.ring };
-
-    for (let i = 0; i < count; i++) {
-      const degrees = 90 + i * step + rotation;
-      const cos = Math.cos(degrees * DEG);
-      const sin = Math.sin(degrees * DEG);
-      const x = lerp(cos * g.ring, (i - offset) * g.stripGap, u);
-      const y = lerp(sin * g.ring, g.stripY, u);
-      // Trees are laid out growing up; +90 turns "up" into "away from the ring centre".
-      const turn = fold(degrees + 90) * (1 - u);
-      sectorRefs.current[i]?.setAttribute(
-        'transform',
-        `translate(${x.toFixed(2)} ${y.toFixed(2)}) rotate(${turn.toFixed(2)}) scale(${g.treeScale.toFixed(4)})`,
-      );
-      glyphRefs.current[i]?.setAttribute('transform', `rotate(${(-turn).toFixed(2)})`);
-
-      // Labels sit beside the hub on the side facing away from the ring's vertical axis,
-      // so their text always runs outward and never across the brain.
-      const side = cos < -0.1 ? -1 : 1;
-      const flip = -sin * side < 0 ? -1 : 1;
-      const tx = -sin * flip;
-      const ty = cos * flip;
-      const label = labelRefs.current[i];
-      if (label) {
-        const lx = lerp(cos * g.ring + tx * 44 + cos * 8, x, u);
-        const ly = lerp(sin * g.ring + ty * 44 + sin * 8 - 3, y + 48, u);
-        label.setAttribute('transform', `translate(${lx.toFixed(2)} ${ly.toFixed(2)})`);
-        label.setAttribute('text-anchor', u > 0.5 ? 'middle' : side > 0 ? 'start' : 'end');
-        // Taglines are wider than the gap between strip hubs; they return when the ring re-forms.
-        label.style.setProperty('--tagline', String(clamp(1 - 2.5 * u, 0, 1)));
-      }
-
-      const spoke = spokeRefs.current[i];
-      if (spoke) {
-        spoke.setAttribute('x1', (cos * (g.ring - LAYOUT.hubRadius)).toFixed(2));
-        spoke.setAttribute('y1', (sin * (g.ring - LAYOUT.hubRadius)).toFixed(2));
-        spoke.setAttribute('x2', (cos * g.brain).toFixed(2));
-        spoke.setAttribute('y2', (sin * g.brain).toFixed(2));
-        spoke.style.opacity = String(0.16 * clamp(1 - 3 * u, 0, 1));
-      }
-      if (i === focusIndexRef.current) focusHub = { x, y };
+    if (fi >= 0 && fi < count) {
+      const degrees = 90 + fi * step + rotation;
+      focusHub = {
+        x: lerp(Math.cos(degrees * DEG) * g.ring, (fi - offset) * g.stripGap, u),
+        y: lerp(Math.sin(degrees * DEG) * g.ring, g.stripY, u),
+      };
     }
 
     // The fly-in: the overview scales up around the focused hub while that hub travels to the
@@ -264,7 +279,8 @@ export function ConstellationCanvas({
         `translate(${(hx - k * focusHub.x).toFixed(2)} ${(hy - k * focusHub.y).toFixed(2)}) scale(${k.toFixed(4)})`,
       );
       overviewLayer.style.opacity = String(1 - smooth(0.05, 0.6, f));
-      overviewLayer.style.visibility = f > 0.995 ? 'hidden' : 'visible';
+      // Hide once opacity reaches 0 (f >= 0.62) so the browser stops rasterising 137 overview nodes.
+      overviewLayer.style.visibility = f >= 0.62 ? 'hidden' : 'visible';
       overviewLayer.style.pointerEvents = f > 0.2 ? 'none' : 'auto';
     }
     const focusLayer = focusRef.current;
@@ -274,6 +290,7 @@ export function ConstellationCanvas({
         `translate(${g.anchor.x.toFixed(2)} ${g.anchor.y.toFixed(2)}) scale(${(g.focusFit * (0.5 + 0.5 * f)).toFixed(4)})`,
       );
       focusLayer.style.opacity = String(smooth(0.3, 1, f));
+      focusLayer.style.visibility = f <= 0.28 ? 'hidden' : 'visible';
       focusLayer.style.pointerEvents = f > 0.8 ? 'auto' : 'none';
     }
     if (brainRef.current) brainRef.current.style.opacity = String(1 - 0.85 * u);
@@ -288,6 +305,7 @@ export function ConstellationCanvas({
   useIsomorphicLayoutEffect(() => {
     geometryRef.current = geometry;
     focusIndexRef.current = focusIndex;
+    ringKeyRef.current = '';
     apply();
   });
 

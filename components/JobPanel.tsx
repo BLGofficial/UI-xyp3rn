@@ -1,11 +1,12 @@
 'use client';
 
 import { Download, Info, X } from 'lucide-react';
-import { useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ui } from '@/data/map';
+import { fetchVaultNote } from '@/lib/gateway';
 import { useDialogFocus } from '@/lib/useDialogFocus';
 import { pathTree } from '@/lib/vault';
-import type { Autonomy, Department, Job, Status } from '@/lib/types';
+import type { Autonomy, Department, Job, Status, VaultNotePayload } from '@/lib/types';
 
 const LADDER: readonly Autonomy[] = ['human-led', 'human-assisted', 'fully-autonomous'];
 const STATUSES: readonly Status[] = ['not-started', 'in-development', 'live'];
@@ -48,8 +49,21 @@ export function JobPanel({
 }: JobPanelProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [help, setHelp] = useState(false);
+  const [liveNote, setLiveNote] = useState<VaultNotePayload | null>(null);
   useDialogFocus(ref, trapFocus);
   const dim = job.stub ? 'text-ink-dim' : 'text-ink';
+
+  useEffect(() => {
+    let active = true;
+    void fetchVaultNote(job.file).then((note) => {
+      if (active && note?.mode === 'live-gateway') {
+        setLiveNote(note);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [job.file]);
 
   return (
     <>
@@ -92,6 +106,15 @@ export function JobPanel({
             <pre aria-label={ui.panel.path} className="mt-2 overflow-x-auto font-mono text-[11px] leading-5 text-ink-dim">
               {pathTree(department.folder, job.file).join('\n')}
             </pre>
+            {liveNote && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 font-mono text-[11px] text-ink-dim">
+                <span className="chip">{liveNote.isCanonical ? 'CANONICAL' : 'WORKSPACE'}</span>
+                <span className="chip">sha256:{liveNote.sha256.slice(0, 10)}</span>
+                <span>
+                  {liveNote.outgoingLinks.length} links · {liveNote.backlinks.length} backlinks
+                </span>
+              </div>
+            )}
           </Section>
 
           <Section n={4}>

@@ -3,15 +3,19 @@
 import { ChevronRight, Settings } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { departments, ui } from '@/data/map';
 import { resolveIcon } from '@/lib/icons';
+import { readUiPreferences, writeUiPreferences } from '@/lib/os3-adapter';
 import { TOKENS } from '@/lib/tokens';
 
 type ChromeContextValue = {
   /** Index of the active sector; shared by the rail, the cycler and the map. */
   active: number;
   setActive: (index: number) => void;
+  /** True when the full-screen Jarvis Operator Console is open on /map. */
+  jarvisOpen: boolean;
+  setJarvisOpen: (open: boolean) => void;
 };
 
 const ChromeContext = createContext<ChromeContextValue | null>(null);
@@ -74,9 +78,26 @@ function SectorButtons({ active, onPick, expanded }: { active: number; onPick: (
 export function ChromeShell({ children }: { children: ReactNode }) {
   const [active, setActive] = useState(0);
   const [expanded, setExpanded] = useState(false);
+  const [jarvisOpen, setJarvisOpen] = useState(false);
+  const [prefsLoaded, setPrefsLoaded] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
-  const context = useMemo(() => ({ active, setActive }), [active]);
+
+  useEffect(() => {
+    const prefs = readUiPreferences();
+    setExpanded(prefs.expandedSidebar);
+    if (prefs.activeSectorIndex < departments.length) {
+      setActive(prefs.activeSectorIndex);
+    }
+    setPrefsLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (!prefsLoaded) return;
+    writeUiPreferences({ expandedSidebar: expanded, activeSectorIndex: active });
+  }, [expanded, active, prefsLoaded]);
+
+  const context = useMemo(() => ({ active, setActive, jarvisOpen, setJarvisOpen }), [active, jarvisOpen]);
 
   const pick = useCallback(
     (index: number) => {
@@ -85,6 +106,11 @@ export function ChromeShell({ children }: { children: ReactNode }) {
     },
     [pathname, router],
   );
+
+  const toggleJarvis = useCallback(() => {
+    setJarvisOpen((current) => !current);
+    if (pathname !== '/map') router.push('/map');
+  }, [pathname, router]);
 
   return (
     <ChromeContext.Provider value={context}>
@@ -100,13 +126,15 @@ export function ChromeShell({ children }: { children: ReactNode }) {
           </Link>
           <SectorButtons active={active} onPick={pick} expanded={expanded} />
           <div className="flex-1" />
-          <div
-            role="img"
+          <button
+            type="button"
+            onClick={toggleJarvis}
             aria-label={ui.rail.operator}
-            className="micro mx-auto grid h-8 w-8 place-items-center rounded-full border border-hairline text-[9px] tracking-normal text-ink"
+            aria-expanded={jarvisOpen}
+            className="micro mx-auto grid h-8 w-8 place-items-center rounded-full border border-hairline text-[9px] tracking-normal text-ink hover:border-accent hover:text-accent"
           >
             {ui.product.operatorInitials}
-          </div>
+          </button>
           {/* STUB: the source shows a settings icon but defines no behaviour for it. */}
           <button
             type="button"

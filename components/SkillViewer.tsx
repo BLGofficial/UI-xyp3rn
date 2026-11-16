@@ -3,10 +3,11 @@
 import { X } from 'lucide-react';
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { ui } from '@/data/map';
+import { fetchVaultNote } from '@/lib/gateway';
 import { parseInline, parseMarkdown, type MdBlock } from '@/lib/markdown';
 import { useDialogFocus } from '@/lib/useDialogFocus';
 import { downloadName } from '@/lib/vault';
-import type { Job } from '@/lib/types';
+import type { Job, VaultNotePayload } from '@/lib/types';
 
 type CopyTarget = 'install' | 'body';
 type Feedback = { target: CopyTarget; ok: boolean };
@@ -77,8 +78,8 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
-function downloadMarkdown(job: Job): void {
-  const url = URL.createObjectURL(new Blob([job.skill.markdown], { type: 'text/markdown;charset=utf-8' }));
+function downloadMarkdown(job: Job, markdownText: string): void {
+  const url = URL.createObjectURL(new Blob([markdownText], { type: 'text/markdown;charset=utf-8' }));
   const link = document.createElement('a');
   link.href = url;
   link.download = downloadName(job.file);
@@ -93,11 +94,33 @@ type SkillViewerProps = {
   onClose: () => void;
 };
 
-/** View 5: the SKILL.MD sheet. Renders the note's Markdown and offers copy and download. */
+/** View 5: the SKILL.MD sheet. Renders the live Vault note Markdown when gateway is online, falling back to local seed. */
 export function SkillViewer({ job, onClose }: SkillViewerProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const [liveNote, setLiveNote] = useState<VaultNotePayload | null>(null);
+  const [loading, setLoading] = useState(false);
   useDialogFocus(ref, true);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    void fetchVaultNote(job.file)
+      .then((note) => {
+        if (!active) return;
+        if (note && note.mode === 'live-gateway' && note.rawContent.trim()) {
+          setLiveNote(note);
+        }
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [job.file]);
+
+  const activeMarkdown = liveNote?.rawContent ?? job.skill.markdown;
 
   useEffect(() => {
     if (!feedback) return;
@@ -106,7 +129,7 @@ export function SkillViewer({ job, onClose }: SkillViewerProps) {
   }, [feedback]);
 
   const copy = async (target: CopyTarget) => {
-    const ok = await copyText(target === 'install' ? job.skill.installCmd : job.skill.markdown);
+    const ok = await copyText(target === 'install' ? job.skill.installCmd : activeMarkdown);
     setFeedback({ target, ok });
   };
   const label = (target: CopyTarget, idle: string) =>
@@ -128,7 +151,10 @@ export function SkillViewer({ job, onClose }: SkillViewerProps) {
           <h2 id="skill-viewer-title" className="truncate text-lg font-semibold tracking-tight">
             {job.title}
           </h2>
-          <p className="truncate font-mono text-xs text-ink-dim">{downloadName(job.file)}</p>
+          <p className="truncate font-mono text-xs text-ink-dim">
+            {downloadName(job.file)}
+            {liveNote ? ` · VAULT LIVE · sha256:${liveNote.sha256.slice(0, 10)}` : loading ? ' · SYNCING VAULT…' : ''}
+          </p>
         </div>
         <span className="micro rounded-t-md border border-b-0 border-hairline bg-ink/5 px-3 py-2 text-ink">
           {ui.viewer.badge}
@@ -148,7 +174,7 @@ export function SkillViewer({ job, onClose }: SkillViewerProps) {
           <button type="button" className={ACTION} onClick={() => void copy('body')}>
             {label('body', ui.viewer.copy)}
           </button>
-          <button type="button" className={ACTION} onClick={() => downloadMarkdown(job)}>
+          <button type="button" className={ACTION} onClick={() => downloadMarkdown(job, activeMarkdown)}>
             {ui.viewer.download}
           </button>
         </div>
@@ -158,7 +184,7 @@ export function SkillViewer({ job, onClose }: SkillViewerProps) {
       </header>
 
       <div className="flex flex-col gap-4 overflow-y-auto px-5 py-6 md:px-8" data-testid="skill-body">
-        {parseMarkdown(job.skill.markdown).map((block, i) => (
+        {parseMarkdown(activeMarkdown).map((block, i) => (
           <Block key={i} block={block} />
         ))}
       </div>

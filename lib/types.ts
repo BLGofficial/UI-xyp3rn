@@ -130,3 +130,358 @@ export type SectorLayout = {
   /** Distance from the hub to the farthest node. */
   reach: number;
 };
+
+export type EngineId = 'claude-code-cli' | 'gemini-api';
+
+export type JarvisVoiceState = 'idle' | 'listening' | 'processing' | 'speaking';
+
+export type GatewayMode = 'live-gateway' | 'local-vault';
+
+export type ConnectorStatus = 'healthy' | 'amber';
+
+export type CommandKind =
+  | 'status'
+  | 'read'
+  | 'write'
+  | 'append'
+  | 'search'
+  | 'flow'
+  | 'task-new'
+  | 'task-run'
+  | 'registry'
+  | 'promote'
+  | 'connections'
+  | 'specialists'
+  | 'research'
+  | 'record'
+  | 'records'
+  | 'song-new'
+  | 'compose'
+  | 'play'
+  | 'gemini'
+  | 'run'
+  | 'chat';
+
+export type ParsedCommand = {
+  kind: CommandKind;
+  raw: string;
+  command: string;
+  args: string;
+  targetPath?: string;
+  engine: EngineId;
+  contextRefs: string[];
+};
+
+export type JarvisExchange = {
+  id: string;
+  timestamp: string;
+  prompt: string;
+  reply: string;
+  commandKind: CommandKind;
+  engine: EngineId;
+  mode: GatewayMode;
+  /** Job ids resolved from @path or @agent tokens in the prompt. */
+  contextJobs: string[];
+  referencedJobId?: string;
+  trackId?: string;
+};
+
+export type GatewayAction =
+  | { type: 'select-job'; jobId: string }
+  | { type: 'play-track'; trackId: string }
+  | { type: 'compose-track'; trackId: string }
+  | { type: 'focus-sector'; sectorId: DepartmentId };
+
+export type GatewayRequest = {
+  prompt: string;
+  engine?: EngineId;
+  activeSector?: DepartmentId;
+  selectedJobId?: string | null;
+};
+
+export type GatewayResponse = {
+  ok: boolean;
+  exchange: JarvisExchange;
+  connectorCount: number;
+  connectorHealthy: number;
+  status: ConnectorStatus;
+  action?: GatewayAction;
+};
+
+export type X3liusTrack = {
+  id: string;
+  songJobId: string;
+  audioJobId: string;
+  promptJobId: string;
+  title: string;
+  subtitle: string;
+  file: string;
+  format: 'wav' | 'mp3' | 'flac';
+  bpm: number;
+  durationSec: number;
+  status: 'rendered' | 'released';
+  release: string;
+  stylePrompt: string;
+  color: string;
+};
+
+export type VisualizerRing = {
+  index: number;
+  radius: number;
+  strokeWidth: number;
+  opacity: number;
+  dashOffset: number;
+};
+
+export type VisualizerBar = {
+  index: number;
+  angle: number;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  amplitude: number;
+};
+
+export type GatewayHealthSnapshot = {
+  ok: boolean;
+  mode: GatewayMode;
+  service: string;
+  vaultRoot: string;
+  agentsCount: number;
+  pendingApprovals: number;
+  totalIndexedFiles: number;
+  bySector: Record<string, number>;
+};
+
+export type VaultNotePayload = {
+  vaultPath: string;
+  sector: string;
+  isCanonical: boolean;
+  rawContent: string;
+  body: string;
+  sha256: string;
+  byteSize: number;
+  outgoingLinks: string[];
+  backlinks: string[];
+  mode: GatewayMode;
+};
+
+export type VaultSearchHit = {
+  vaultPath: string;
+  sector: string;
+  title: string;
+  sha256: string;
+  tags: string[];
+  mode: GatewayMode;
+};
+
+export type GatewayApprovalItem = {
+  id: string;
+  itemType: string;
+  itemId: string;
+  status: 'pending' | 'approved' | 'rejected';
+  proposer: string;
+  approver: string | null;
+  reason: string | null;
+  createdAt: string;
+  decidedAt: string | null;
+};
+
+export type Os3JobRecord = {
+  id: string;
+  kind: string;
+  name: string;
+  status: 'queued' | 'running' | 'success' | 'error' | 'cancelled';
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  errorDetail: string | null;
+};
+
+export type Os3AgentRunRecord = {
+  id: string;
+  agentName: string;
+  status: 'running' | 'success' | 'error' | 'cancelled';
+  startedAt: string;
+  finishedAt: string | null;
+  durationMs: number | null;
+  errorDetail: string | null;
+};
+
+export type Os3RuntimeEventRecord = {
+  id: number;
+  timestamp: string;
+  eventType: string;
+  domain: string;
+  actor: string;
+  targetPath: string | null;
+};
+
+export type Os3AgentSummary = {
+  name: string;
+  class: string;
+  domain: string;
+  model: string;
+  tools: string[];
+  role: string;
+  contract: string;
+  refuses: string;
+  path: string;
+  lastRun: Os3AgentRunRecord | null;
+};
+
+export type Os3WorkflowSummary = {
+  name: string;
+  description: string;
+  sourcePath: string;
+  requiredInputs: string[];
+  stepCount: number;
+  steps: Array<{ id: string; agent: string; dependsOn: string[] }>;
+  lastJob: Os3JobRecord | null;
+};
+
+export type Os3SystemOverview = {
+  ok: boolean;
+  service: string;
+  vaultRoot: string;
+  sqliteOpen: boolean;
+  integrityOk: boolean;
+  schemaVersion: number | null;
+  indexStats: { totalFiles: number; bySector: Record<string, number> };
+  agents: {
+    total: number;
+    failuresCount: number;
+    byClass: Record<string, number>;
+    byDomain: Record<string, number>;
+  };
+  workflows: { total: number; names: string[] };
+  runtime: {
+    activeLocks: number;
+    pendingApprovals: number;
+    totalApprovals: number;
+    recentRunsCount: number;
+    recentJobsCount: number;
+    recentEventsCount: number;
+  };
+  pendingApprovalsList: GatewayApprovalItem[];
+  recentJobs: Os3JobRecord[];
+  recentAgentRuns: Os3AgentRunRecord[];
+  recentEvents: Os3RuntimeEventRecord[];
+};
+
+export type Os3VaultTreeNote = {
+  vaultPath: string;
+  title: string;
+  domain: string | null;
+  docType: string | null;
+  status: string | null;
+  tags: string[];
+  sha256: string;
+  wikilinksCount: number;
+};
+
+export type Os3VaultTreeSector = {
+  sector: string;
+  totalIndexed: number;
+  returnedCount: number;
+  folders: Array<{ folder: string; count: number; notes: Os3VaultTreeNote[] }>;
+};
+
+export type Os3VaultTreeResponse = {
+  ok: boolean;
+  totalFiles: number;
+  bySector: Record<string, number>;
+  sectors: Os3VaultTreeSector[];
+};
+
+export type Os3KnowledgeGraphNode = {
+  id: string;
+  title: string;
+  sector: string;
+  domain: string | null;
+  docType: string | null;
+  status: string | null;
+  degree: number;
+};
+
+export type Os3KnowledgeGraphEdge = {
+  source: string;
+  target: string;
+  rawTarget: string;
+};
+
+export type Os3KnowledgeGraphResponse = {
+  ok: boolean;
+  sector: string | null;
+  totalIndexed: number;
+  nodeCount: number;
+  edgeCount: number;
+  nodes: Os3KnowledgeGraphNode[];
+  edges: Os3KnowledgeGraphEdge[];
+};
+
+export type Os3DomainEntrySummary = {
+  vaultPath: string;
+  title: string;
+  docType: string | null;
+  status: string | null;
+  tags: string[];
+  sha256: string;
+  wikilinksCount: number;
+};
+
+export type Os3ResearchOverview = {
+  ok: boolean;
+  counts: {
+    totalIntelligenceFiles: number;
+    totalMaterialFiles: number;
+    projects: number;
+    questions: number;
+    sources: number;
+    evidence: number;
+    findings: number;
+    contradictions: number;
+    experiments: number;
+    briefs: number;
+    specialists: number;
+  };
+  projects: Os3DomainEntrySummary[];
+  questions: Os3DomainEntrySummary[];
+  sources: Os3DomainEntrySummary[];
+  evidence: Os3DomainEntrySummary[];
+  findings: Os3DomainEntrySummary[];
+  contradictions: Os3DomainEntrySummary[];
+  experiments: Os3DomainEntrySummary[];
+  briefs: Os3DomainEntrySummary[];
+  recentRuns: Os3AgentRunRecord[];
+};
+
+export type Os3RecordsOverview = {
+  ok: boolean;
+  counts: {
+    totalRecordsFiles: number;
+    songs: number;
+    lyrics: number;
+    vocalDna: number;
+    sunoPrompts: number;
+    audioTakes: number;
+    releases: number;
+    rightsSplits: number;
+    catalogAssignments: number;
+    sessionsDaily: number;
+    recordAgents: number;
+  };
+  songs: Os3DomainEntrySummary[];
+  lyrics: Os3DomainEntrySummary[];
+  vocalDna: Os3DomainEntrySummary[];
+  sunoPrompts: Os3DomainEntrySummary[];
+  audioTakes: Os3DomainEntrySummary[];
+  releases: Os3DomainEntrySummary[];
+  rightsSplits: Os3DomainEntrySummary[];
+  catalogAssignments: Os3DomainEntrySummary[];
+  sessionsDaily: Os3DomainEntrySummary[];
+  recentRuns: Os3AgentRunRecord[];
+};
+
+

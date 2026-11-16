@@ -1,5 +1,5 @@
-import { EmptyState } from '@/components/EmptyState';
+import { DashboardsView } from '@/components/DashboardsView';
 
 export default function DashboardsPage() {
-  return <EmptyState view="dashboards" />;
+  return <DashboardsView />;
 }
