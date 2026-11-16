@@ -41,6 +41,73 @@
   .chip {
     @apply rounded-md border border-hairline px-2.5 py-1 font-mono text-[11px] text-ink;
   }
+
+  /* Jarvis Operator Console: seamless orb-matched void & hover-reveal frosted glass */
+  .jarvis-void-bg {
+    background: radial-gradient(circle at 50% 48%, #140d1e 0%, #07050b 60%, #050408 100%);
+  }
+
+  .jarvis-orb-stage {
+    -webkit-mask-image: radial-gradient(circle at 50% 50%, #000 54%, rgba(0, 0, 0, 0.78) 72%, transparent 94%);
+    mask-image: radial-gradient(circle at 50% 50%, #000 54%, rgba(0, 0, 0, 0.78) 72%, transparent 94%);
+  }
+
+  .jarvis-glass-bar {
+    background: rgba(12, 9, 22, 0.42);
+    border: 1px solid rgba(239, 235, 226, 0.11);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 8px 32px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(18px) saturate(130%);
+    -webkit-backdrop-filter: blur(18px) saturate(130%);
+    transition:
+      background-color 200ms ease,
+      border-color 200ms ease,
+      box-shadow 200ms ease;
+  }
+
+  .jarvis-glass-bar:hover,
+  .jarvis-glass-bar:focus-within {
+    background: rgba(16, 12, 28, 0.78);
+    border-color: rgba(239, 235, 226, 0.22);
+  }
+
+  .jarvis-glass-panel {
+    background: rgba(12, 9, 22, 0.24);
+    border: 1px solid rgba(239, 235, 226, 0.09);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 10px 30px rgba(0, 0, 0, 0.28);
+    backdrop-filter: blur(18px) saturate(135%);
+    -webkit-backdrop-filter: blur(18px) saturate(135%);
+    opacity: 0.44;
+    will-change: opacity, background-color, border-color, transform;
+    transition:
+      opacity 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      background-color 220ms ease,
+      border-color 220ms ease,
+      box-shadow 220ms ease,
+      transform 220ms ease;
+  }
+
+  .jarvis-glass-panel:hover,
+  .jarvis-glass-panel:focus-within,
+  .jarvis-glass-panel[data-pinned='true'] {
+    opacity: 1;
+    background: rgba(15, 11, 26, 0.78);
+    border-color: rgba(245, 155, 92, 0.34);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.16),
+      0 20px 52px rgba(0, 0, 0, 0.65),
+      0 0 28px rgba(139, 124, 246, 0.14);
+  }
+
+  .jarvis-glass-panel .jarvis-panel-body {
+    opacity: 0.78;
+    transition: opacity 200ms ease;
+  }
+
+  .jarvis-glass-panel:hover .jarvis-panel-body,
+  .jarvis-glass-panel:focus-within .jarvis-panel-body,
+  .jarvis-glass-panel[data-pinned='true'] .jarvis-panel-body {
+    opacity: 1;
+  }
 }
 
 /* ---------- Constellation SVG ---------- */
