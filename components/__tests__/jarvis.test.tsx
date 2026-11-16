@@ -8,7 +8,10 @@ import { X3liusPlayer } from '@/components/X3liusPlayer';
 import { brain, ui, x3liusTracks } from '@/data/map';
 import { LAYOUT } from '@/lib/tokens';
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe('JarvisVisualizer', () => {
   it('renders harmonic rings, frequency bars, both engine cores and triggers voice toggle', async () => {
@@ -116,5 +119,78 @@ describe('JarvisDock and JarvisView', () => {
     const chip = await within(dialog).findByRole('button', { name: /Mission & Operator Identity/i }, { timeout: 3000 });
     await userEvent.click(chip);
     expect(onSelectJob).toHaveBeenCalledWith('mission-identity');
+  });
+
+  it('supports collapsible glass windows, hover-reveal pin toggle, and audio reverse-engineering with operator save decision', async () => {
+    const fetchCalls: Array<{ url: string; body?: string }> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        fetchCalls.push({ url, body: typeof init?.body === 'string' ? init.body : undefined });
+        if (url.includes('/api/health')) {
+          return new Response(
+            JSON.stringify({ ok: true, indexStats: { totalFiles: 20354, bySector: {} }, agentsCount: 52 }),
+            { status: 200 },
+          );
+        }
+        if (url.includes('/api/audio/prompts')) {
+          return new Response(
+            JSON.stringify({ ok: true, folder: '09_X3LIUS_MUSIC/AUDIO_EXTRACTED_PROMPTS', prompts: [] }),
+            { status: 200 },
+          );
+        }
+        if (url.includes('/api/audio/save-prompts')) {
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              folder: '09_X3LIUS_MUSIC/AUDIO_EXTRACTED_PROMPTS',
+              savedFiles: [
+                {
+                  facet: 'unified',
+                  vaultPath: '09_X3LIUS_MUSIC/AUDIO_EXTRACTED_PROMPTS/2026-11-16-Test-Drill-Extracted-Prompt.md',
+                  sha256: 'deadbeef1234',
+                  byteSize: 900,
+                  createdCopy: false,
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response(JSON.stringify({ ok: false }), { status: 404 });
+      }),
+    );
+
+    render(<JarvisView activeSector="01_CORE" selectedJobId={null} />);
+    const dialog = screen.getByRole('dialog', { name: ui.jarvis.title });
+
+    // 1. Toggle Hover Reveal -> Glass Pinned
+    const pinBtn = within(dialog).getByRole('button', { name: /HOVER REVEAL/i });
+    await userEvent.click(pinBtn);
+    expect(within(dialog).getByRole('button', { name: /GLASS PINNED/i })).toBeInTheDocument();
+
+    // 2. Import an audio file via X3liusPlayer's file input
+    const fileInput = dialog.querySelector<HTMLInputElement>('input[type="file"]')!;
+    const wavFile = new File([new Uint8Array(64)], 'Test-Drill-140.wav', { type: 'audio/wav' });
+    fireEvent.change(fileInput, { target: { files: [wavFile] } });
+
+    // 3. Extraction finishes cleanly WITHOUT automatically saving
+    expect(await within(dialog).findByDisplayValue(/140 BPM/i, {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(fetchCalls.some((c) => c.url.includes('/api/audio/save-prompts'))).toBe(false);
+
+    // 4. Inspect Vocal & Flow and Instruments & Mix tabs
+    await userEvent.click(within(dialog).getByRole('tab', { name: /VOCAL & FLOW/i }));
+    expect(within(dialog).getByText(/Flow Pocket:/i)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('tab', { name: /INSTRUMENTS & MIX/i }));
+    expect(within(dialog).getByText(/Mix Spec:/i)).toBeInTheDocument();
+
+    // 5. Explicitly click SAVE TO OBSIDIAN -> calls /api/audio/save-prompts targeting dedicated folder
+    const saveBtn = within(dialog).getByRole('button', { name: /SAVE TO OBSIDIAN/i });
+    await userEvent.click(saveBtn);
+    expect(
+      await within(dialog).findByText(/Saved 1 Markdown file\(s\) to 09_X3LIUS_MUSIC\/AUDIO_EXTRACTED_PROMPTS\//i),
+    ).toBeInTheDocument();
+    expect(fetchCalls.some((c) => c.url.includes('/api/audio/save-prompts'))).toBe(true);
   });
 });

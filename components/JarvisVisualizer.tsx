@@ -35,19 +35,30 @@ type JarvisVisualizerProps = {
   energy: number;
   /** Optional phase in radians for live frequency modulation. */
   phase?: number;
+  /** Optional live music/imported-audio AnalyserNode synced to the 3D Orb. */
+  playbackAnalyser?: AnalyserNode | null;
+  /** Seamless borderless stage variant vs compact embedded card. */
+  seamless?: boolean;
+  /** Hide overlay chrome inside the WebGL canvas when rendered as a backdrop behind centered controls. */
+  hideOverlayHud?: boolean;
+  onMicStatusChange?: (status: 'idle' | 'active' | 'denied') => void;
   onTriggerVoice?: () => void;
   onSelectState?: (next: JarvisVoiceState) => void;
 };
 
 /**
- * Interactive 3D Voice Assistant Reactive Sphere (Three.js + WebGL Bloom + Microphone FFT)
- * with graceful SVG harmonic fallback when WebGL is unavailable.
+ * Interactive 3D Voice Assistant Reactive Sphere (Three.js + WebGL Bloom + Microphone & Playback FFT)
+ * rendered seamlessly inside the orb void with graceful SVG harmonic fallback when WebGL is absent.
  */
 export const JarvisVisualizer = memo(function JarvisVisualizer({
   state,
   activeEngine,
   energy,
   phase = 0,
+  playbackAnalyser = null,
+  seamless = true,
+  hideOverlayHud = false,
+  onMicStatusChange,
   onTriggerVoice,
   onSelectState,
 }: JarvisVisualizerProps) {
@@ -69,7 +80,10 @@ export const JarvisVisualizer = memo(function JarvisVisualizer({
         setWebglReady(false);
         return;
       }
-      const instance = new VoiceAssistantOrb(el, (status) => setMicStatus(status));
+      const instance = new VoiceAssistantOrb(el, (status) => {
+        setMicStatus(status);
+        onMicStatusChange?.(status);
+      });
       orbRef.current = instance;
       setWebglReady(true);
       return () => {
@@ -79,6 +93,7 @@ export const JarvisVisualizer = memo(function JarvisVisualizer({
     } catch {
       setWebglReady(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -86,6 +101,12 @@ export const JarvisVisualizer = memo(function JarvisVisualizer({
     if (!orb) return;
     orb.setState(mapJarvisStateToOrbState(state));
   }, [state]);
+
+  useEffect(() => {
+    const orb = orbRef.current;
+    if (!orb) return;
+    orb.setPlaybackAnalyser(playbackAnalyser ?? null);
+  }, [playbackAnalyser]);
 
   const handleVoiceTrigger = () => {
     if (state !== 'listening') {
@@ -117,83 +138,88 @@ export const JarvisVisualizer = memo(function JarvisVisualizer({
   };
 
   return (
-    <div className="relative flex w-full flex-col items-center">
+    <div className={seamless ? 'relative flex h-full w-full items-center justify-center' : 'relative flex w-full flex-col items-center'}>
       {webglReady ? (
         <div
           role="group"
           aria-label={ui.jarvis.visualizer.label}
-          style={{
-            background: 'radial-gradient(circle at 50% 48%, #140d1e 0%, #07050b 60%, #050408 100%)',
-          }}
-          className="relative h-72 w-full select-none overflow-hidden rounded-[12px] border border-hairline md:h-80"
+          className={
+            seamless
+              ? 'relative h-full w-full select-none overflow-hidden bg-transparent'
+              : 'jarvis-void-bg relative h-72 w-full select-none overflow-hidden rounded-[12px] border border-hairline md:h-80'
+          }
         >
           <div
             id="orb-container"
             ref={containerRef}
             data-testid="jarvis-orb-webgl"
-            className="h-full w-full touch-none"
+            className={`h-full w-full touch-none ${seamless ? 'jarvis-orb-stage' : ''}`}
           />
 
-          <div className="pointer-events-none absolute inset-x-3 top-2.5 flex items-center justify-between gap-2">
-            {brain.cores.map((core) => {
-              const active = core.id === activeEngine;
-              return (
-                <span
-                  key={core.id}
-                  className={`micro rounded-full border px-2.5 py-0.5 backdrop-blur ${
-                    active ? 'border-hairline bg-bg/70 text-ink' : 'border-transparent bg-bg/40 text-ink-dim opacity-70'
+          {!hideOverlayHud && (
+            <>
+              <div className="pointer-events-none absolute inset-x-3 top-2.5 flex items-center justify-between gap-2">
+                {brain.cores.map((core) => {
+                  const active = core.id === activeEngine;
+                  return (
+                    <span
+                      key={core.id}
+                      className={`micro rounded-full border px-2.5 py-0.5 backdrop-blur ${
+                        active ? 'border-hairline bg-black/55 text-ink' : 'border-transparent bg-black/30 text-ink-dim opacity-60'
+                      }`}
+                    >
+                      {core.label}
+                    </span>
+                  );
+                })}
+              </div>
+
+              <div className="pointer-events-none absolute inset-x-3 bottom-2.5 flex flex-wrap items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={handleVoiceTrigger}
+                  aria-label={ui.jarvis.visualizer.trigger}
+                  aria-pressed={state === 'listening'}
+                  className={`pointer-events-auto micro flex items-center gap-1.5 rounded-full border px-3 py-1.5 backdrop-blur transition-colors ${
+                    state === 'listening'
+                      ? 'border-[#1FEAD1]/70 bg-[#1FEAD1]/15 font-bold text-[#BFFFEF]'
+                      : 'border-hairline bg-black/60 text-ink hover:border-accent'
                   }`}
                 >
-                  {core.label}
-                </span>
-              );
-            })}
-          </div>
+                  <Mic size={12} strokeWidth={1.75} aria-hidden="true" />
+                  <span>
+                    {state === 'listening'
+                      ? micStatus === 'denied'
+                        ? 'MIC DENIED'
+                        : micStatus === 'active'
+                          ? 'MIC LIVE'
+                          : 'LISTENING'
+                      : ui.jarvis.states[state]}
+                  </span>
+                </button>
 
-          <div className="pointer-events-none absolute inset-x-3 bottom-2.5 flex flex-wrap items-center justify-between gap-2">
-            <button
-              type="button"
-              onClick={handleVoiceTrigger}
-              aria-label={ui.jarvis.visualizer.trigger}
-              aria-pressed={state === 'listening'}
-              className={`pointer-events-auto micro flex items-center gap-1.5 rounded-full border px-3 py-1.5 backdrop-blur transition-colors ${
-                state === 'listening'
-                  ? 'border-[#1FEAD1]/70 bg-[#1FEAD1]/15 font-bold text-[#BFFFEF]'
-                  : 'border-hairline bg-bg/75 text-ink hover:border-accent'
-              }`}
-            >
-              <Mic size={12} strokeWidth={1.75} aria-hidden="true" />
-              <span>
-                {state === 'listening'
-                  ? micStatus === 'denied'
-                    ? 'MIC DENIED'
-                    : micStatus === 'active'
-                      ? 'MIC LIVE'
-                      : 'LISTENING'
-                  : ui.jarvis.states[state]}
-              </span>
-            </button>
-
-            <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-hairline bg-bg/75 p-0.5 backdrop-blur">
-              {ORB_MODES.map((modeItem) => {
-                const active = state === modeItem.voiceState;
-                return (
-                  <button
-                    key={modeItem.voiceState}
-                    type="button"
-                    aria-label={`Orb state ${modeItem.label}`}
-                    aria-pressed={active}
-                    onClick={() => handleSelectMode(modeItem.voiceState)}
-                    className={`micro rounded-full px-2 py-1 text-[10px] ${
-                      active ? 'bg-ink font-bold text-bg' : 'text-ink-dim hover:text-ink'
-                    }`}
-                  >
-                    {modeItem.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+                <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-hairline bg-black/60 p-0.5 backdrop-blur">
+                  {ORB_MODES.map((modeItem) => {
+                    const active = state === modeItem.voiceState;
+                    return (
+                      <button
+                        key={modeItem.voiceState}
+                        type="button"
+                        aria-label={`Orb state ${modeItem.label}`}
+                        aria-pressed={active}
+                        onClick={() => handleSelectMode(modeItem.voiceState)}
+                        className={`micro rounded-full px-2 py-1 text-[10px] ${
+                          active ? 'bg-ink font-bold text-bg' : 'text-ink-dim hover:text-ink'
+                        }`}
+                      >
+                        {modeItem.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          )}
         </div>
       ) : (
         <svg

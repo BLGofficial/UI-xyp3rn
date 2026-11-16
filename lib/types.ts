@@ -484,4 +484,109 @@ export type Os3RecordsOverview = {
   recentRuns: Os3AgentRunRecord[];
 };
 
+export type AudioPromptFacet = 'style' | 'genres' | 'vocal' | 'flow' | 'instruments';
+export type AudioPromptSaveMode = 'unified' | 'per-facet';
+
+export type AudioStructureSection = {
+  label: string;
+  startSec: number;
+  endSec: number;
+  energy: number;
+};
+
+export type AudioAcousticTelemetry = {
+  fileName: string;
+  mimeType?: string;
+  fileSizeBytes?: number;
+  durationSec: number;
+  sampleRate: number;
+  channels: number;
+  bpm: number;
+  bpmConfidence: number;
+  musicalKey: string;
+  scale: string;
+  keyConfidence: number;
+  rmsDb: number;
+  peakDb: number;
+  crestDb: number;
+  estimatedLufs: number;
+  spectralCentroidHz: number;
+  subBassRatio: number;
+  lowMidRatio: number;
+  vocalMidRatio: number;
+  airHighRatio: number;
+  stereoWidth: number;
+  transientDensity: number;
+  swingFactor: number;
+  vocalActivityScore: number;
+  sections?: AudioStructureSection[];
+};
+
+export type AudioReverseEngineeredSpec = {
+  id: string;
+  sourceFileName: string;
+  analyzedAt: string;
+  title: string;
+  analysisMode: 'dsp-telemetry' | 'dsp+llm-enriched';
+  summary: string;
+  stylePrompt: string;
+  expandedPrompt: string;
+  negativePrompt: string;
+  genres: string[];
+  subgenresAndMoods: string[];
+  vocalSpec: {
+    hasVocals: boolean;
+    delivery: string;
+    register: string;
+    singingStyle: string;
+    vocalEffects: string[];
+    lyricCadenceHint: string;
+  };
+  flowSpec: {
+    pocket: string;
+    cadence: string;
+    energyCurve: string;
+    rhythmTags: string[];
+  };
+  instrumentsSpec: {
+    drumsAndPercussion: string[];
+    bassAndSub: string[];
+    melodicAndHarmonic: string[];
+    texturesAndFx: string[];
+    mixAndMastering: string;
+  };
+  sunoMetaTags: string[];
+  telemetry: AudioAcousticTelemetry;
+  relatedVaultNotes: Array<{ vaultPath: string; title: string; sector: string }>;
+};
+
+export type SavedAudioPromptFile = {
+  facet: AudioPromptFacet | 'unified';
+  vaultPath: string;
+  sha256: string;
+  byteSize: number;
+  createdCopy: boolean;
+};
+
+export type SavedAudioPromptSummary = {
+  vaultPath: string;
+  title: string;
+  sha256: string;
+  tags: string[];
+  status: string | null;
+  bpm: number | null;
+  musicalKey: string | null;
+  sourceAudio: string | null;
+  updatedAt: string;
+};
+
+export type ImportedAudioEntry = {
+  file: File;
+  fileName: string;
+  objectUrl: string;
+  sizeBytes: number;
+  mimeType: string;
+  durationSec: number;
+};
+
 

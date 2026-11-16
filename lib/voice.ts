@@ -141,14 +141,23 @@ export function speakJarvisReply(
 
 /**
  * Advances playback time at `MOTION.spectrumTickMs` intervals for the X3LIUS player and
- * schedules subtle Web Audio sub-bass pulses at the track's BPM when AudioContext is available.
+ * schedules subtle Web Audio sub-bass pulses at the track's BPM routed through an exposed
+ * `AnalyserNode` when `AudioContext` is available.
  * @param bpm track tempo in beats per minute
  * @param onTick called with elapsed seconds on each tick
+ * @param options optional live analyser callback and volume [0, 1]
  */
-export function startTrackClock(bpm: number, onTick: (deltaSec: number) => void): () => void {
+export function startTrackClock(
+  bpm: number,
+  onTick: (deltaSec: number) => void,
+  options: { onAnalyser?: (analyser: AnalyserNode | null) => void; volume?: number } = {},
+): () => void {
   const stepSec = MOTION.spectrumTickMs / 1000;
   let audioCtx: AudioContext | null = null;
+  let gainMaster: GainNode | null = null;
+  let analyser: AnalyserNode | null = null;
   let nextBeatTime = 0;
+  let stepIndex = 0;
 
   if (typeof window !== 'undefined') {
     const Ctx =
@@ -156,7 +165,15 @@ export function startTrackClock(bpm: number, onTick: (deltaSec: number) => void)
     if (typeof Ctx === 'function') {
       try {
         audioCtx = new Ctx();
+        gainMaster = audioCtx.createGain();
+        gainMaster.gain.value = Math.min(1, Math.max(0, options.volume ?? 0.65));
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.72;
+        gainMaster.connect(analyser);
+        analyser.connect(audioCtx.destination);
         nextBeatTime = audioCtx.currentTime;
+        options.onAnalyser?.(analyser);
       } catch {
         audioCtx = null;
       }
@@ -167,19 +184,35 @@ export function startTrackClock(bpm: number, onTick: (deltaSec: number) => void)
 
   const timer = globalThis.setInterval(() => {
     onTick(stepSec);
-    if (audioCtx && audioCtx.state === 'running' && audioCtx.currentTime >= nextBeatTime) {
+    if (audioCtx && gainMaster && audioCtx.state === 'running' && audioCtx.currentTime >= nextBeatTime) {
       try {
+        const now = audioCtx.currentTime;
         const osc = audioCtx.createOscillator();
-        const gain = audioCtx.createGain();
+        const env = audioCtx.createGain();
         osc.type = 'sine';
-        osc.frequency.setValueAtTime(55, audioCtx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(32, audioCtx.currentTime + 0.12);
-        gain.gain.setValueAtTime(0.03, audioCtx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.14);
-        osc.connect(gain);
-        gain.connect(audioCtx.destination);
-        osc.start();
-        osc.stop(audioCtx.currentTime + 0.15);
+        const rootHz = stepIndex % 4 === 0 ? 58 : 49;
+        osc.frequency.setValueAtTime(rootHz * 1.4, now);
+        osc.frequency.exponentialRampToValueAtTime(36, now + 0.14);
+        env.gain.setValueAtTime(0.055, now);
+        env.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+        osc.connect(env);
+        env.connect(gainMaster);
+        osc.start(now);
+        osc.stop(now + 0.2);
+
+        if (stepIndex % 2 === 1) {
+          const chime = audioCtx.createOscillator();
+          const chimeEnv = audioCtx.createGain();
+          chime.type = 'triangle';
+          chime.frequency.setValueAtTime(stepIndex % 4 === 3 ? 330 : 220, now);
+          chimeEnv.gain.setValueAtTime(0.015, now);
+          chimeEnv.gain.exponentialRampToValueAtTime(0.0001, now + 0.11);
+          chime.connect(chimeEnv);
+          chimeEnv.connect(gainMaster);
+          chime.start(now);
+          chime.stop(now + 0.12);
+        }
+        stepIndex += 1;
       } catch {
         // Ignore audio node scheduling errors in restricted environments.
       }
@@ -189,6 +222,7 @@ export function startTrackClock(bpm: number, onTick: (deltaSec: number) => void)
 
   return () => {
     globalThis.clearInterval(timer);
+    options.onAnalyser?.(null);
     if (audioCtx) {
       try {
         void audioCtx.close();

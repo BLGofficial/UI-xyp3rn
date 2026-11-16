@@ -341,6 +341,8 @@ export class VoiceAssistantOrb {
   audioCtx: AudioContext | null = null;
   analyser: AnalyserNode | null = null;
   freqData: Uint8Array<ArrayBuffer> | null = null;
+  playbackAnalyser: AnalyserNode | null = null;
+  playbackFreqData: Uint8Array<ArrayBuffer> | null = null;
   micStream: MediaStream | null = null;
   isMicInitialized = false;
   externalAudioLevels: AudioLevels | null = null;
@@ -387,12 +389,16 @@ export class VoiceAssistantOrb {
   morphTime = 0;
   voiceTime = 0;
   prevVoiceRaw = 0;
+  prevPlaybackRaw = 0;
   isRunning = true;
+  private lastWidth = 0;
+  private lastHeight = 0;
   private rafId: number | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private _onPointerMove!: (e: PointerEvent) => void;
   private _onPointerLeave!: () => void;
   private _onResize!: () => void;
+  private _onVisibilityChange!: () => void;
 
   constructor(container: HTMLElement, onMicStatusChange?: (status: 'idle' | 'active' | 'denied') => void) {
     this.container = container;
@@ -408,13 +414,17 @@ export class VoiceAssistantOrb {
     this.scene = new THREE.Scene();
     const width = this.container.clientWidth || 360;
     const height = this.container.clientHeight || 360;
+    this.lastWidth = width;
+    this.lastHeight = height;
 
     this.camera = new THREE.PerspectiveCamera(42, width / height, 0.1, 100);
-    this.camera.position.set(0, 0.0, 6.2);
+    this.camera.position.set(0, 0.0, 5.8);
 
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.75);
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+    this.renderer.setClearColor(0x000000, 0);
     this.renderer.setSize(width, height);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setPixelRatio(pixelRatio);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.08;
     this.container.appendChild(this.renderer.domElement);
@@ -423,6 +433,7 @@ export class VoiceAssistantOrb {
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.04;
     this.controls.enablePan = false;
+    this.controls.enableZoom = false;
     this.controls.minDistance = 3.8;
     this.controls.maxDistance = 9.0;
 
@@ -431,14 +442,14 @@ export class VoiceAssistantOrb {
     this.bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 0.58, 0.45, 0.18);
     this.composer.addPass(this.bloomPass);
 
-    this.sphereGeo = new THREE.SphereGeometry(this.BASE_RADIUS, 220, 165);
+    this.sphereGeo = new THREE.SphereGeometry(this.BASE_RADIUS, 200, 150);
     this.uniforms = {
       uMorphTime: { value: 0 },
       uRealTime: { value: 0 },
       uVoiceTime: { value: 0 },
       uPointer: { value: new THREE.Vector3(0, 0, 10) },
       uPointerActive: { value: 0.0 },
-      uPixelRatio: { value: Math.min(window.devicePixelRatio || 1, 2) },
+      uPixelRatio: { value: pixelRatio },
       uRadius: { value: this.BASE_RADIUS },
       uFoldDepth: { value: 0.18 },
       uFreq: { value: 0.9 },
@@ -544,10 +555,50 @@ export class VoiceAssistantOrb {
   }
 
   /**
+   * Attaches a dedicated music/audio playback AnalyserNode so playing imported audio
+   * files drives the orb organically even while not actively in microphone listening mode.
+   */
+  setPlaybackAnalyser(analyser: AnalyserNode | null): void {
+    this.playbackAnalyser = analyser;
+    this.playbackFreqData = analyser ? new Uint8Array(analyser.frequencyBinCount) : null;
+    this.prevPlaybackRaw = 0;
+  }
+
+  /**
    * Optional manual override to feed custom audio levels ({ low, mid, high, punch }) from an external pipeline.
    */
   setAudioLevels(levels: AudioLevels | null): void {
     this.externalAudioLevels = levels;
+  }
+
+  private _sampleBands(
+    analyser: AnalyserNode,
+    freqData: Uint8Array<ArrayBuffer>,
+    gate: number,
+    prevRaw: number,
+  ): { low: number; mid: number; high: number; punch: number; rawTotal: number } {
+    analyser.getByteFrequencyData(freqData);
+    let rawLow = 0;
+    let rawMid = 0;
+    let rawHigh = 0;
+    const len = freqData.length;
+    const lowEnd = Math.min(8, len - 1);
+    const midEnd = Math.min(42, len - 1);
+    const highEnd = Math.min(110, len - 1);
+    for (let i = 1; i <= lowEnd; i++) rawLow += freqData[i] ?? 0;
+    for (let i = lowEnd + 1; i <= midEnd; i++) rawMid += freqData[i] ?? 0;
+    for (let i = midEnd + 1; i <= highEnd; i++) rawHigh += freqData[i] ?? 0;
+
+    rawLow = lowEnd > 0 ? rawLow / (lowEnd * 255) : 0;
+    rawMid = midEnd > lowEnd ? rawMid / ((midEnd - lowEnd) * 255) : 0;
+    rawHigh = highEnd > midEnd ? rawHigh / ((highEnd - midEnd) * 255) : 0;
+
+    const low = Math.max(0, rawLow - gate) * 2.8;
+    const mid = Math.max(0, rawMid - gate) * 3.4;
+    const high = Math.max(0, rawHigh - gate * 0.8) * 3.6;
+    const currentRaw = low * 0.4 + mid * 0.45 + high * 0.15;
+    const punch = Math.min(1.5, Math.max(0, currentRaw - prevRaw) * 6.5);
+    return { low, mid, high, punch, rawTotal: currentRaw };
   }
 
   private _bindEvents(): void {
@@ -564,17 +615,38 @@ export class VoiceAssistantOrb {
     this._onResize = () => {
       const width = this.container.clientWidth || 360;
       const height = this.container.clientHeight || 360;
-      if (!width || !height) return;
+      if (!width || !height || (width === this.lastWidth && height === this.lastHeight)) return;
+      this.lastWidth = width;
+      this.lastHeight = height;
+      const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.75);
       this.camera.aspect = width / height;
       this.camera.updateProjectionMatrix();
+      this.renderer.setPixelRatio(pixelRatio);
       this.renderer.setSize(width, height);
       this.composer.setSize(width, height);
-      this.uniforms.uPixelRatio.value = Math.min(window.devicePixelRatio || 1, 2);
+      this.uniforms.uPixelRatio.value = pixelRatio;
+    };
+    this._onVisibilityChange = () => {
+      if (typeof document === 'undefined' || !this.isRunning) return;
+      if (document.hidden) {
+        if (this.rafId !== null) {
+          cancelAnimationFrame(this.rafId);
+          this.rafId = null;
+        }
+      } else {
+        this.clock.getDelta();
+        if (this.rafId === null) {
+          this.rafId = requestAnimationFrame(this._animate);
+        }
+      }
     };
 
     window.addEventListener('pointermove', this._onPointerMove);
     window.addEventListener('pointerleave', this._onPointerLeave);
     window.addEventListener('resize', this._onResize);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', this._onVisibilityChange);
+    }
 
     if (typeof ResizeObserver !== 'undefined') {
       this.resizeObserver = new ResizeObserver(() => this._onResize());
@@ -584,6 +656,10 @@ export class VoiceAssistantOrb {
 
   private _animate(): void {
     if (!this.isRunning) return;
+    if (typeof document !== 'undefined' && document.hidden) {
+      this.rafId = null;
+      return;
+    }
     this.rafId = requestAnimationFrame(this._animate);
 
     const dt = Math.min(this.clock.getDelta(), 0.05);
@@ -594,64 +670,50 @@ export class VoiceAssistantOrb {
     let mid = 0;
     let high = 0;
     let punch = 0;
+    let musicReactiveWeight = 0;
 
     if (this.externalAudioLevels) {
       low = this.externalAudioLevels.low ?? 0;
       mid = this.externalAudioLevels.mid ?? 0;
       high = this.externalAudioLevels.high ?? 0;
       punch = this.externalAudioLevels.punch ?? 0;
+      if (this.currentState === 'idle' && low + mid + high > 0.015) {
+        musicReactiveWeight = Math.min(0.85, (low + mid + high) * 0.45);
+      }
+    } else if (this.currentState === 'listening' && this.analyser && this.freqData) {
+      const sampled = this._sampleBands(this.analyser, this.freqData, 0.035, this.prevVoiceRaw);
+      low = sampled.low;
+      mid = sampled.mid;
+      high = sampled.high;
+      punch = sampled.punch;
+      this.prevVoiceRaw = sampled.rawTotal;
+    } else if (this.playbackAnalyser && this.playbackFreqData && (this.currentState === 'idle' || this.currentState === 'speaking')) {
+      const sampled = this._sampleBands(this.playbackAnalyser, this.playbackFreqData, 0.02, this.prevPlaybackRaw);
+      this.prevPlaybackRaw = sampled.rawTotal;
+      if (sampled.low + sampled.mid + sampled.high > 0.015) {
+        low = sampled.low * 0.92;
+        mid = sampled.mid * 0.96;
+        high = sampled.high * 0.95;
+        punch = sampled.punch * 0.9;
+        musicReactiveWeight = this.currentState === 'idle' ? Math.min(0.82, (low + mid + high) * 0.46) : 0;
+      }
     } else if (this.currentState === 'idle') {
       low = 0;
       mid = 0;
       high = 0;
       punch = 0;
-    } else if (this.currentState === 'listening') {
-      if (this.analyser && this.freqData) {
-        this.analyser.getByteFrequencyData(this.freqData);
-        let rawLow = 0;
-        let rawMid = 0;
-        let rawHigh = 0;
-        for (let i = 1; i <= 8; i++) rawLow += this.freqData[i] ?? 0;
-        for (let i = 9; i <= 42; i++) rawMid += this.freqData[i] ?? 0;
-        for (let i = 43; i <= 110; i++) rawHigh += this.freqData[i] ?? 0;
-
-        rawLow = rawLow / (8 * 255);
-        rawMid = rawMid / (34 * 255);
-        rawHigh = rawHigh / (68 * 255);
-
-        const gate = 0.035;
-        low = Math.max(0, rawLow - gate) * 2.8;
-        mid = Math.max(0, rawMid - gate) * 3.4;
-        high = Math.max(0, rawHigh - gate * 0.8) * 3.6;
-
-        const currentVoiceRaw = low * 0.4 + mid * 0.45 + high * 0.15;
-        const delta = Math.max(0, currentVoiceRaw - this.prevVoiceRaw);
-        this.prevVoiceRaw = currentVoiceRaw;
-        punch = Math.min(1.5, delta * 6.5);
-      }
     } else if (this.currentState === 'speaking') {
       if (this.analyser && this.freqData) {
-        this.analyser.getByteFrequencyData(this.freqData);
-        let rawLow = 0;
-        let rawMid = 0;
-        let rawHigh = 0;
-        for (let i = 1; i <= 8; i++) rawLow += this.freqData[i] ?? 0;
-        for (let i = 9; i <= 42; i++) rawMid += this.freqData[i] ?? 0;
-        for (let i = 43; i <= 110; i++) rawHigh += this.freqData[i] ?? 0;
-        const sum = rawLow + rawMid + rawHigh;
-        if (sum > 10) {
-          low = (rawLow / (8 * 255)) * 2.4;
-          mid = (rawMid / (34 * 255)) * 2.8;
-          high = (rawHigh / (68 * 255)) * 2.8;
-        } else {
-          const phraseEnv = 0.55 + 0.45 * Math.sin(elapsed * 1.7);
-          const syllable = Math.pow(Math.max(0, Math.sin(elapsed * 8.2) * Math.cos(elapsed * 3.4) + 0.35), 1.4);
-          const consonant = Math.abs(Math.sin(elapsed * 23.0)) * 0.45;
-          low = syllable * phraseEnv * 0.85;
-          mid = syllable * phraseEnv * (0.95 + 0.3 * Math.sin(elapsed * 15.0));
-          high = (syllable * 0.5 + consonant) * phraseEnv * 0.8;
+        const sampled = this._sampleBands(this.analyser, this.freqData, 0.015, this.prevVoiceRaw);
+        if (sampled.low + sampled.mid + sampled.high > 0.04) {
+          low = sampled.low;
+          mid = sampled.mid;
+          high = sampled.high;
+          punch = sampled.punch;
+          this.prevVoiceRaw = sampled.rawTotal;
         }
-      } else {
+      }
+      if (low + mid + high <= 0.01) {
         const phraseEnv = 0.55 + 0.45 * Math.sin(elapsed * 1.7);
         const syllable = Math.pow(Math.max(0, Math.sin(elapsed * 8.2) * Math.cos(elapsed * 3.4) + 0.35), 1.4);
         const consonant = Math.abs(Math.sin(elapsed * 23.0)) * 0.45;
@@ -672,7 +734,7 @@ export class VoiceAssistantOrb {
           ? 0.35
           : 0.16
         : this.currentState === 'idle'
-          ? 0.18
+          ? 0.2
           : 0.24;
 
     this.liveParams.audioLow = THREE.MathUtils.lerp(this.liveParams.audioLow, low, lerpRate);
@@ -681,7 +743,7 @@ export class VoiceAssistantOrb {
     this.liveParams.voicePunch = THREE.MathUtils.lerp(this.liveParams.voicePunch, punch, 0.28);
 
     if (
-      this.currentState === 'listening' &&
+      (this.currentState === 'listening' || this.currentState === 'idle') &&
       !isSpeakingNow &&
       this.liveParams.audioLow + this.liveParams.audioMid + this.liveParams.audioHigh < 0.004
     ) {
@@ -698,19 +760,34 @@ export class VoiceAssistantOrb {
       this.liveParams.voicePunch * 0.7;
 
     const targetSpeed =
-      this.currentState === 'listening' ? Math.min(1.65, activeVoiceEnergy * 1.45) : target.speed;
+      this.currentState === 'listening'
+        ? Math.min(1.65, activeVoiceEnergy * 1.45)
+        : musicReactiveWeight > 0.02
+          ? Math.min(1.05, activeVoiceEnergy * 0.78)
+          : target.speed;
+
+    const targetSpeakWeight = Math.max(target.speakW, musicReactiveWeight);
+    const targetBloom = target.bloom + musicReactiveWeight * 0.22;
 
     this.liveParams.speed = THREE.MathUtils.lerp(this.liveParams.speed, targetSpeed, 0.15);
-    this.liveParams.foldDepth = THREE.MathUtils.lerp(this.liveParams.foldDepth, target.foldDepth, 0.06);
-    this.liveParams.freq = THREE.MathUtils.lerp(this.liveParams.freq, target.freq, 0.06);
+    this.liveParams.foldDepth = THREE.MathUtils.lerp(
+      this.liveParams.foldDepth,
+      target.foldDepth + musicReactiveWeight * 0.09,
+      0.06,
+    );
+    this.liveParams.freq = THREE.MathUtils.lerp(
+      this.liveParams.freq,
+      target.freq + musicReactiveWeight * 0.45,
+      0.06,
+    );
     this.liveParams.spinY = THREE.MathUtils.lerp(this.liveParams.spinY, target.spinY, 0.06);
     this.liveParams.spinX = THREE.MathUtils.lerp(this.liveParams.spinX, target.spinX, 0.06);
     this.liveParams.spinZ = THREE.MathUtils.lerp(this.liveParams.spinZ, target.spinZ, 0.06);
-    this.liveParams.bloom = THREE.MathUtils.lerp(this.liveParams.bloom, target.bloom, 0.06);
+    this.liveParams.bloom = THREE.MathUtils.lerp(this.liveParams.bloom, targetBloom, 0.06);
 
     this.liveParams.listenW = THREE.MathUtils.lerp(this.liveParams.listenW, target.listenW, 0.08);
     this.liveParams.thinkW = THREE.MathUtils.lerp(this.liveParams.thinkW, target.thinkW, 0.08);
-    this.liveParams.speakW = THREE.MathUtils.lerp(this.liveParams.speakW, target.speakW, 0.08);
+    this.liveParams.speakW = THREE.MathUtils.lerp(this.liveParams.speakW, targetSpeakWeight, 0.08);
 
     this.morphTime += dt * this.liveParams.speed;
     this.voiceTime += dt * (activeVoiceEnergy * 1.85) * this.liveParams.listenW;
@@ -779,6 +856,9 @@ export class VoiceAssistantOrb {
     window.removeEventListener('pointermove', this._onPointerMove);
     window.removeEventListener('pointerleave', this._onPointerLeave);
     window.removeEventListener('resize', this._onResize);
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this._onVisibilityChange);
+    }
 
     if (this.micStream) {
       for (const track of this.micStream.getTracks()) {
