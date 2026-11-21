@@ -1,6 +1,6 @@
 'use client';
 
-import { ChevronRight, Settings } from 'lucide-react';
+import { ChevronRight, Disc, Settings } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
@@ -165,16 +165,16 @@ export function ChromeShell({ children }: { children: ReactNode }) {
           {children}
           <nav
             aria-label={ui.nav.label}
-            className="frost absolute left-1/2 top-4 z-30 flex -translate-x-1/2 gap-1 rounded-full p-1 shadow-[0_14px_38px_rgba(0,0,0,0.55)]"
+            className="frost absolute left-1/2 top-4 z-30 flex max-w-[calc(100vw-1rem)] -translate-x-1/2 gap-1 overflow-x-auto rounded-full p-1 shadow-[0_14px_38px_rgba(0,0,0,0.55)]"
           >
             {ui.nav.items.map((item) => {
-              const current = pathname === item.href;
+              const current = pathname === item.href || (item.href === '/daw' && pathname?.startsWith('/daw'));
               return (
                 <Link
                   key={item.id}
                   href={item.href}
                   aria-current={current ? 'page' : undefined}
-                  className={`micro rounded-full px-4 py-2 ${current ? 'bg-ink font-bold text-bg' : 'text-ink-dim hover:text-ink'}`}
+                  className={`micro shrink-0 rounded-full px-3.5 py-2 sm:px-4 ${current ? 'bg-ink font-bold text-bg' : 'text-ink-dim hover:text-ink'}`}
                 >
                   {item.label}
                 </Link>
@@ -191,6 +191,13 @@ export function ChromeShell({ children }: { children: ReactNode }) {
             <LogoMark />
           </Link>
           <SectorButtons active={active} onPick={pick} expanded={false} />
+          <Link
+            href="/daw"
+            aria-label="DAW Brain Studio Console"
+            className="grid h-11 w-11 place-items-center text-s05_records"
+          >
+            <Disc size={18} strokeWidth={1.5} aria-hidden="true" />
+          </Link>
         </nav>
       </div>
     </ChromeContext.Provider>

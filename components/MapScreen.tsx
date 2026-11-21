@@ -63,7 +63,10 @@ export function MapScreen() {
       fetchRuntimeRuns(50),
     ]);
 
-    if (treeRes.ok && treeRes.data) {
+    if (overviewRes.statusKind === 'permission-denied' || treeRes.statusKind === 'permission-denied') {
+      setGatewayMode('local-vault');
+      setSyncError(`PERMISSION DENIED: ${treeRes.error ?? overviewRes.error ?? 'Unauthorized'}`);
+    } else if (treeRes.ok && treeRes.data) {
       const merged = mergeVaultTreeIntoDepartments(seedDepartments, treeRes.data, runsRes.data);
       setDepartments(merged.departments);
       setStatuses(merged.liveStatuses);
@@ -157,8 +160,12 @@ export function MapScreen() {
     (status: Status) => {
       if (!selectedId) return;
       const entry = jobMap.get(selectedId);
+      if (gatewayMode !== 'live-gateway') {
+        setSyncError(`OS3 Gateway offline: operational status change (${status}) cannot be persisted cleanly.`);
+        return;
+      }
       setStatuses((prev) => ({ ...prev, [selectedId]: status }));
-      if (gatewayMode === 'live-gateway' && entry) {
+      if (entry) {
         void dispatchJarvis({
           prompt: `xyp3rn> record status update ${entry.job.title} (${selectedId}) -> ${status}`,
           activeSector: entry.dept.id,
@@ -237,27 +244,34 @@ export function MapScreen() {
         )}
       </div>
 
-      <div className="frost absolute right-3 top-[60px] z-20 hidden items-center gap-2 rounded-full px-3 py-1.5 font-mono text-[10px] text-ink-dim md:right-4 md:top-4 md:flex">
-        <span
-          aria-hidden="true"
-          className={`h-1.5 w-1.5 rounded-full ${gatewayMode === 'live-gateway' ? 'bg-[#3ECFB2]' : 'bg-accent'}`}
-        />
-        <span>
-          {loadingSync
-            ? 'SYNCING OS3…'
-            : gatewayMode === 'live-gateway'
-              ? `OS3 LIVE · ${vaultTotalFiles} FILES · ${pendingApprovals} PENDING`
-              : 'SEED FALLBACK'}
-        </span>
+      <div className="frost absolute right-3 top-[60px] z-20 hidden max-w-sm flex-col items-end gap-1 rounded-2xl px-3 py-1.5 font-mono text-[10px] text-ink-dim md:right-4 md:top-4 md:flex">
+        <div className="flex items-center gap-2">
+          <span
+            aria-hidden="true"
+            className={`h-1.5 w-1.5 rounded-full ${gatewayMode === 'live-gateway' ? 'bg-[#3ECFB2]' : 'bg-accent'}`}
+          />
+          <span>
+            {loadingSync
+              ? 'SYNCING OS3…'
+              : gatewayMode === 'live-gateway'
+                ? `OS3 LIVE · ${vaultTotalFiles} FILES · ${pendingApprovals} PENDING`
+                : 'SEED FALLBACK'}
+          </span>
+          {syncError && !loadingSync && (
+            <button
+              type="button"
+              onClick={() => void syncWithOs3Backend()}
+              className="underline hover:text-ink"
+              title={syncError}
+            >
+              RETRY
+            </button>
+          )}
+        </div>
         {syncError && !loadingSync && (
-          <button
-            type="button"
-            onClick={() => void syncWithOs3Backend()}
-            className="underline hover:text-ink"
-            title={syncError}
-          >
-            RETRY
-          </button>
+          <p role="alert" className="text-right text-[10px] text-rose-200">
+            {syncError}
+          </p>
         )}
       </div>
 

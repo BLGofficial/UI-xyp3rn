@@ -1,4 +1,5 @@
 import { departments as defaultDepartments, x3liusTracks as defaultTracks } from '@/data/map';
+import { os3FetchJson, type Os3HttpOptions, type Os3HttpResult } from './api-http';
 import {
   buildTrackSpectrum,
   isSafeVaultPath,
@@ -736,6 +737,22 @@ export async function fetchPendingApprovals(
  * @param input approval decision payload
  * @param options injectable fetch and baseUrl
  */
+export async function decideGatewayApprovalDetailed(
+  input: {
+    approvalId: string;
+    decision: 'approved' | 'rejected';
+    approver: string;
+    reason: string;
+  },
+  options: Os3HttpOptions = {},
+): Promise<Os3HttpResult<{ ok: boolean; approval: GatewayApprovalItem }>> {
+  return os3FetchJson<{ ok: boolean; approval: GatewayApprovalItem }>(
+    '/api/approvals/decide',
+    { method: 'POST', body: JSON.stringify(input) },
+    options,
+  );
+}
+
 export async function decideGatewayApproval(
   input: {
     approvalId: string;
@@ -745,22 +762,8 @@ export async function decideGatewayApproval(
   },
   options: { fetchImpl?: typeof fetch; baseUrl?: string } = {},
 ): Promise<GatewayApprovalItem | null> {
-  const fetchFn = options.fetchImpl ?? (typeof fetch !== 'undefined' ? fetch : undefined);
-  const baseUrl = options.baseUrl ?? GATEWAY_BASE_URL;
-  if (!fetchFn) return null;
-
-  try {
-    const response = await fetchFn(`${baseUrl}/api/approvals/decide`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    });
-    if (!response.ok) return null;
-    const data = (await response.json()) as Partial<{ ok: boolean; approval: GatewayApprovalItem }>;
-    return data.ok && data.approval ? data.approval : null;
-  } catch {
-    return null;
-  }
+  const res = await decideGatewayApprovalDetailed(input, options);
+  return res.ok && res.data?.approval ? res.data.approval : null;
 }
 
 /**

@@ -79,6 +79,7 @@ export function KnowledgeGraphView() {
   const [graph, setGraph] = useState<Os3KnowledgeGraphResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [errorKind, setErrorKind] = useState<'permission-denied' | 'offline' | 'error' | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [note, setNote] = useState<VaultNotePayload | null>(null);
@@ -100,11 +101,19 @@ export function KnowledgeGraphView() {
   const loadGraph = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setErrorKind(null);
     const res = await fetchKnowledgeGraph({
       sector: sectorFilter === 'ALL' ? undefined : sectorFilter,
       limit: 180,
     });
     if (!res.ok || !res.data) {
+      setErrorKind(
+        res.statusKind === 'permission-denied'
+          ? 'permission-denied'
+          : res.statusKind === 'offline'
+            ? 'offline'
+            : 'error',
+      );
       setError(res.error ?? 'Failed to fetch Vault Knowledge Graph.');
       setGraph(null);
     } else {
@@ -330,13 +339,26 @@ export function KnowledgeGraphView() {
           {error && (
             <div
               role="alert"
-              className="m-4 rounded-xl border border-rose-400/35 bg-rose-950/35 p-4 font-mono text-xs text-rose-100"
+              className="m-4 rounded-xl border border-rose-400/35 bg-rose-950/45 p-4 font-mono text-xs text-rose-100"
             >
-              {error}
+              <p className="font-semibold text-rose-200">
+                {errorKind === 'permission-denied'
+                  ? 'PERMISSION DENIED (401/403)'
+                  : errorKind === 'offline'
+                    ? 'GATEWAY OFFLINE'
+                    : 'KNOWLEDGE GRAPH ERROR'}
+              </p>
+              <p className="mt-1">{error}</p>
             </div>
           )}
 
-          {!error && (
+          {!error && !loading && nodes.length === 0 && (
+            <div className="m-4 rounded-xl border border-dashed border-white/15 p-4 font-mono text-xs text-ink-dim">
+              No Vault nodes matched this sector filter in the live OS3 index.
+            </div>
+          )}
+
+          {!error && nodes.length > 0 && (
             <svg
               viewBox="0 0 960 640"
               className="h-full w-full cursor-grab select-none active:cursor-grabbing"
