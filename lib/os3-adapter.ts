@@ -1,14 +1,17 @@
 import { departments as seedDepartments, ui } from '@/data/map';
-import { GATEWAY_BASE_URL } from './gateway';
-import { MOTION } from './tokens';
+import { os3FetchJson, type Os3HttpOptions, type Os3HttpStatusKind } from './api-http';
 import type {
   Department,
   DepartmentId,
   GatewayApprovalItem,
   GatewayMode,
   Job,
+  Os3AgentExecutionResponse,
   Os3AgentRunRecord,
   Os3AgentSummary,
+  Os3CoreModulesOverview,
+  Os3DiagnosticsOverview,
+  Os3GovernanceOverview,
   Os3JobRecord,
   Os3KnowledgeGraphResponse,
   Os3RecordsOverview,
@@ -16,8 +19,10 @@ import type {
   Os3RuntimeEventRecord,
   Os3SystemOverview,
   Os3VaultTreeResponse,
+  Os3WorkflowExecutionResponse,
   Os3WorkflowSummary,
   Status,
+  VaultSearchHit,
 } from './types';
 
 export const UI_PREFS_STORAGE_KEY = 'xyp3rn.ui.prefs.v1';
@@ -30,15 +35,13 @@ export type UiPreferences = {
 export type ApiAdapterResult<T> = {
   ok: boolean;
   mode: GatewayMode;
+  statusKind?: Os3HttpStatusKind;
+  statusCode?: number;
   data: T | null;
   error: string | null;
 };
 
-export type AdapterOptions = {
-  fetchImpl?: typeof fetch;
-  baseUrl?: string;
-  timeoutMs?: number;
-};
+export type AdapterOptions = Os3HttpOptions;
 
 function browserStorage(): Storage | undefined {
   try {
@@ -82,54 +85,64 @@ export function writeUiPreferences(
   }
 }
 
-async function fetchJson<T>(path: string, options: AdapterOptions = {}): Promise<ApiAdapterResult<T>> {
-  const fetchFn = options.fetchImpl ?? (typeof fetch !== 'undefined' ? fetch : undefined);
-  const baseUrl = options.baseUrl ?? GATEWAY_BASE_URL;
-  if (!fetchFn) {
-    return { ok: false, mode: 'local-vault', data: null, error: 'Fetch API unavailable in current environment.' };
-  }
-
-  const timeoutMs = options.timeoutMs ?? Math.max(8000, MOTION.gatewayTimeoutMs * 4);
-  const controller = typeof AbortController !== 'undefined' ? new AbortController() : undefined;
-  const timer = controller ? globalThis.setTimeout(() => controller.abort(), timeoutMs) : undefined;
-
-  try {
-    const response = await fetchFn(`${baseUrl}${path}`, {
-      headers: { Accept: 'application/json' },
-      signal: controller?.signal,
-    });
-    if (!response.ok) {
-      return {
-        ok: false,
-        mode: 'local-vault',
-        data: null,
-        error: `Gateway returned HTTP ${response.status} for ${path}`,
-      };
-    }
-    const payload = (await response.json()) as T & { ok?: boolean; error?: string };
-    if (payload && typeof payload === 'object' && payload.ok === false) {
-      return {
-        ok: false,
-        mode: 'local-vault',
-        data: null,
-        error: typeof payload.error === 'string' ? payload.error : `Gateway rejected ${path}`,
-      };
-    }
-    return { ok: true, mode: 'live-gateway', data: payload, error: null };
-  } catch (err) {
-    return {
-      ok: false,
-      mode: 'local-vault',
-      data: null,
-      error: err instanceof Error ? err.message : 'OS3 gateway unreachable',
-    };
-  } finally {
-    if (timer !== undefined) globalThis.clearTimeout(timer);
-  }
+async function fetchJson<T>(
+  path: string,
+  options: AdapterOptions = {},
+  init: RequestInit = {},
+): Promise<ApiAdapterResult<T>> {
+  const res = await os3FetchJson<T>(path, init, options);
+  return {
+    ok: res.ok,
+    mode: res.ok ? 'live-gateway' : 'local-vault',
+    statusKind: res.statusKind,
+    statusCode: res.statusCode,
+    data: res.data,
+    error: res.error,
+  };
 }
 
 export function fetchSystemOverview(options: AdapterOptions = {}): Promise<ApiAdapterResult<Os3SystemOverview>> {
   return fetchJson<Os3SystemOverview>('/api/overview', options);
+}
+
+export function fetchCoreModulesOverview(options: AdapterOptions = {}): Promise<ApiAdapterResult<Os3CoreModulesOverview>> {
+  return fetchJson<Os3CoreModulesOverview>('/api/modules', options);
+}
+
+export function fetchGovernanceOverview(options: AdapterOptions = {}): Promise<ApiAdapterResult<Os3GovernanceOverview>> {
+  return fetchJson<Os3GovernanceOverview>('/api/governance', options);
+}
+
+export function fetchDiagnosticsOverview(options: AdapterOptions = {}): Promise<ApiAdapterResult<Os3DiagnosticsOverview>> {
+  return fetchJson<Os3DiagnosticsOverview>('/api/diagnostics', options);
+}
+
+export function searchKnowledgeVault(
+  query: string,
+  options: AdapterOptions & { limit?: number } = {},
+): Promise<ApiAdapterResult<{ ok: boolean; query: string; count: number; hits: VaultSearchHit[] }>> {
+  const qs = new URLSearchParams({ q: query, limit: String(options.limit ?? 20) });
+  return fetchJson(`/api/vault/search?${qs.toString()}`, options);
+}
+
+export function executeRegisteredAgent(
+  input: { agentName: string; goal: string; mode?: 'analyze' | 'execute' },
+  options: AdapterOptions = {},
+): Promise<ApiAdapterResult<Os3AgentExecutionResponse>> {
+  return fetchJson('/api/agents/run', options, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function executeWorkflowDefinition(
+  input: { workflowName: string; inputs: Record<string, unknown> },
+  options: AdapterOptions = {},
+): Promise<ApiAdapterResult<Os3WorkflowExecutionResponse>> {
+  return fetchJson('/api/workflows/run', options, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
 }
 
 export function fetchVaultTree(

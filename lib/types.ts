@@ -629,4 +629,75 @@ export type ImportedAudioEntry = {
   durationSec: number;
 };
 
+export type Os3CoreModuleSummary = {
+  id: string;
+  name: string;
+  sector: string;
+  status: 'healthy' | 'degraded' | 'offline';
+  summary: string;
+  sourcePath: string;
+};
+
+export type Os3CoreModulesOverview = {
+  ok: boolean;
+  generatedAt: string;
+  modules: Os3CoreModuleSummary[];
+};
+
+export type Os3GovernanceOverview = {
+  ok: boolean;
+  generatedAt: string;
+  enforcedInvariants: Array<{ id: string; name: string; enforced: boolean; detail: string }>;
+  counts: {
+    policies: number;
+    standards: number;
+    totalGovNotes: number;
+    activeLocks: number;
+    pendingApprovals: number;
+    approvedCount: number;
+    rejectedCount: number;
+    securityEventsCount: number;
+  };
+  policies: Os3DomainEntrySummary[];
+  standards: Os3DomainEntrySummary[];
+  activeLocks: Array<{ resourceKey: string; ownerId: string; acquiredAt: string; expiresAt: string }>;
+  recentSecurityEvents: Os3RuntimeEventRecord[];
+};
+
+export type Os3DiagnosticsOverview = {
+  ok: boolean;
+  generatedAt: string;
+  sqlite: { open: boolean; integrityOk: boolean; schemaVersion: number | null; dbPath: string };
+  vault: { vaultRoot: string; totalIndexedFiles: number; sectorsCount: number };
+  agents: { loadedCount: number; failuresCount: number; failures: unknown[]; skippedCount: number };
+  runtimeHealth: { failedRunsCount: number; failedJobsCount: number; activeLocksCount: number };
+  dawHealth: {
+    state: string;
+    stale: boolean;
+    adaptersRegistered: number;
+    reachableInstances: number;
+    hostProbes: unknown[];
+  } | null;
+};
+
+export type Os3AgentExecutionResponse = {
+  ok: boolean;
+  run: Os3AgentRunRecord;
+  output: {
+    agent: string;
+    class: string;
+    domain: string;
+    mode: string;
+    summary: string;
+    evidencePaths: string[];
+  };
+};
+
+export type Os3WorkflowExecutionResponse = {
+  ok: boolean;
+  job: Os3JobRecord;
+  steps: Array<{ stepId: string; agent: string; status: string; runId: string }>;
+};
+
+
 

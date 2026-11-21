@@ -23,6 +23,7 @@ export const ui = {
       { id: 'map', label: 'MAP', href: '/map' },
       { id: 'dashboards', label: 'DASHBOARDS', href: '/dashboards' },
       { id: 'chart', label: 'CHART', href: '/chart' },
+      { id: 'daw', label: 'DAW', href: '/daw' },
     ],
   },
   rail: {

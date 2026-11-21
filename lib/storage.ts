@@ -1,5 +1,9 @@
 import type { Job, Status } from './types';
 
+/**
+ * @deprecated Retained strictly for unit-test compatibility and offline preview rendering.
+ * Authoritative operational statuses MUST come from OS3 runtime APIs (`/api/overview`, `/api/runs`, `/api/vault/tree`).
+ */
 export const STATUS_STORAGE_KEY = 'xyp3rn.constellation.status.v1';
 
 const STATUSES: readonly Status[] = ['not-started', 'in-development', 'live'];
